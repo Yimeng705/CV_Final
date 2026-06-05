@@ -1,0 +1,8 @@
+Ablation Study Results
+============================================================
+Configuration                    Before    After       жд%
+------------------------------------------------------------
+Full (Odometry+GNSS+Loop)        0.1284   0.0808   +37.1%
+Odom+GNSS (w/o Loop)             0.1627   0.1191   +26.8%
+Odom+Loop (w/o GNSS)             0.1276   0.0858   +32.8%
+Odometry only                    0.1418   0.1029   +27.4%

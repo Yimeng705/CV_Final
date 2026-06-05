@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+conda/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output images (too many)
+gs_slam/output/*.png
+!gs_slam/output/report.html
+!gs_slam/output/h_ablation.txt
+
+# Large files
+*.pth
+*.pkl
+*.h5
+checkpoints/
+
+# GTSAM build artifacts
+gtsam/build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Old files
+cv大作业.jpg
+torch_check.txt

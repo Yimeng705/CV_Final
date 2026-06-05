@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>3DGS-SLAM 实验报告</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Arial,sans-serif;background:#f0f2f5;color:#333}
+.c{max-width:1200px;margin:0 auto;padding:20px}
+.hd{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:40px 20px;text-align:center;border-radius:12px;margin-bottom:30px}
+.hd h1{font-size:2em}
+.card{background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.card h2{color:#667eea;margin-bottom:16px;border-bottom:2px solid #667eea20;padding-bottom:8px}
+.metrics{display:flex;gap:20px;flex-wrap:wrap}
+.mb{flex:1;min-width:180px;background:linear-gradient(135deg,#667eea10,#764ba210);border-radius:10px;padding:20px;text-align:center}
+.mb .v{font-size:2em;font-weight:bold;color:#667eea}
+.mb .l{color:#666;margin-top:4px}
+table{width:100%;border-collapse:collapse;margin:10px 0}
+th,td{padding:10px 14px;text-align:center;border-bottom:1px solid #eee}
+th{background:#667eea10;color:#667eea;font-weight:600}
+.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:16px}
+.gallery img{width:100%;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1)}
+.gallery .caption{text-align:center;color:#666;margin-top:6px;font-size:.9em}
+.paper{background:#f8f9fa;border-left:4px solid #667eea;padding:12px 16px;margin:8px 0;border-radius:0 8px 8px 0}
+.footer{text-align:center;color:#999;padding:20px;margin-top:30px;border-top:1px solid #eee}
+</style></head>
+<body><div class="c">
+<div class="hd">
+<h1>3D Gaussian Splatting 增强的视觉SLAM系统</h1>
+<p>基于 MASt3R-SLAM + MASt3R-Fusion + OpenMonoGS-SLAM + 3DGS综述 的实验</p>
+</div>
+
+<div class="card">
+<h2>📊 实验指标</h2>
+<div class="metrics">
+<div class="mb"><div class="v">0.0950</div><div class="l">ATE (m)</div></div>
+<div class="mb"><div class="v">0.1037</div><div class="l">RPE-t (m)</div></div>
+<div class="mb"><div class="v">0.0223</div><div class="l">RPE-r (rad)</div></div>
+<div class="mb"><div class="v">300</div><div class="l">3D高斯核</div></div>
+</div>
+</div>
+
+<div class="card">
+<h2>🧪 消融实验</h2>
+<table>
+<tr><th>配置</th><th>优化前ATE</th><th>优化后ATE</th><th>改善</th></tr>
+<tr><td>Full (Odometry+GNSS+Loop)</td><td>0.1284</td><td>0.0808</td><td style='color:green'>+37.1%</td></tr><tr><td>Odom+GNSS (w/o Loop)</td><td>0.1627</td><td>0.1191</td><td style='color:green'>+26.8%</td></tr><tr><td>Odom+Loop (w/o GNSS)</td><td>0.1276</td><td>0.0858</td><td style='color:green'>+32.8%</td></tr><tr><td>Odometry only</td><td>0.1418</td><td>0.1029</td><td style='color:green'>+27.4%</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h2>🖼️ 可视化</h2>
+<div class="gallery">
+<div><img src="a_3dgs_render.png"><div class="caption">图1: 3DGS渲染结果</div></div>
+<div><img src="c_comparison.png"><div class="caption">图2: 3DGS vs 点云对比</div></div>
+<div><img src="e_trajectory.png"><div class="caption">图3: SLAM轨迹对比与优化</div></div>
+<div><img src="f_mapping_result.png"><div class="caption">图4: 增量建图结果</div></div>
+<div><img src="g_semantic.png"><div class="caption">图5: 语义特征可视化</div></div>
+</div>
+</div>
+
+<div class="card">
+<h2>📚 参考文献</h2>
+<div class="paper"><strong>[1] MASt3R-SLAM</strong> (Murai et al., 2024) - 基于MASt3R的实时单目稠密SLAM<br>
+代码: https://edexheim.github.io/mast3r-slam</div>
+<div class="paper"><strong>[2] MASt3R-Fusion</strong> (Zhou et al., 2025) - 前馈视觉+IMU/GNSS多传感器融合<br>
+代码: https://github.com/GREAT-WHU/MASt3R-Fusion</div>
+<div class="paper"><strong>[3] OpenMonoGS-SLAM</strong> (Yoo et al., 2025) - 单目3DGS+开放集语义SLAM<br>
+代码: https://jisang1528.github.io/OpenMonoGS-SLAM</div>
+<div class="paper"><strong>[4] 3DGS综述</strong> (Chen & Wang, 2024) - 3D Gaussian Splatting系统综述<br>
+代码: https://github.com/guikunchen/Awesome3DGS</div>
+</div>
+
+<div class="card">
+<h2>💡 实现要点</h2>
+<ul style="padding-left:20px;line-height:2">
+<li><strong>前端:</strong> 模拟MASt3R的pointmap输出, 使用RANSAC+Umeyama进行3D-3D匹配</li>
+<li><strong>后端:</strong> 位姿图优化, 支持里程计/GNSS/回环多种因子</li>
+<li><strong>建图:</strong> 增量3DGS建图, 关联语义特征向量</li>
+<li><strong>渲染:</strong> 基于tile的splat渲染, 支持RGB+语义联合输出</li>
+</ul>
+</div>
+
+<div class="footer">CV Final Project | 3D重建与SLAM方向 | 基于2024-2025年顶会论文</div>
+</div></body></html>
