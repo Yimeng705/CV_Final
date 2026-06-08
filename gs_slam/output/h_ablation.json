@@ -1,0 +1,145 @@
+{
+  "factor_graph_ablation": [
+    {
+      "name": "Full (Odometry+GNSS+Loop)",
+      "ate_before": 0.1335841864347458,
+      "ate_after": 0.08277852088212967,
+      "improvement_pct": 38.03269577026367
+    },
+    {
+      "name": "Odom+GNSS (w/o Loop)",
+      "ate_before": 0.14515970647335052,
+      "ate_after": 0.09657721221446991,
+      "improvement_pct": 33.46830749511719
+    },
+    {
+      "name": "Odom+Loop (w/o GNSS)",
+      "ate_before": 0.1453249305486679,
+      "ate_after": 0.08434370905160904,
+      "improvement_pct": 41.96198272705078
+    },
+    {
+      "name": "Odometry only",
+      "ate_before": 0.14672577381134033,
+      "ate_after": 0.10736265033483505,
+      "improvement_pct": 26.827680587768555
+    }
+  ],
+  "sem_weight_ablation": [
+    {
+      "name": "Baseline (几何)",
+      "weight": 0.0,
+      "initial_n": 1200,
+      "final_n": 21130,
+      "growth_ratio": 17.608333333333334,
+      "n_cloned": 0,
+      "n_split": 19930,
+      "n_semantic_boost": 1863
+    },
+    {
+      "name": "语义权重=0.1",
+      "weight": 0.1,
+      "initial_n": 1200,
+      "final_n": 20988,
+      "growth_ratio": 17.49,
+      "n_cloned": 0,
+      "n_split": 19788,
+      "n_semantic_boost": 1869
+    },
+    {
+      "name": "语义权重=0.2",
+      "weight": 0.2,
+      "initial_n": 1200,
+      "final_n": 21162,
+      "growth_ratio": 17.635,
+      "n_cloned": 0,
+      "n_split": 19962,
+      "n_semantic_boost": 1937
+    },
+    {
+      "name": "语义权重=0.3",
+      "weight": 0.3,
+      "initial_n": 1200,
+      "final_n": 21410,
+      "growth_ratio": 17.841666666666665,
+      "n_cloned": 0,
+      "n_split": 20210,
+      "n_semantic_boost": 1935
+    },
+    {
+      "name": "语义权重=0.4",
+      "weight": 0.4,
+      "initial_n": 1200,
+      "final_n": 21882,
+      "growth_ratio": 18.235,
+      "n_cloned": 0,
+      "n_split": 20682,
+      "n_semantic_boost": 1976
+    },
+    {
+      "name": "语义权重=0.5",
+      "weight": 0.5,
+      "initial_n": 1200,
+      "final_n": 22172,
+      "growth_ratio": 18.476666666666667,
+      "n_cloned": 0,
+      "n_split": 20972,
+      "n_semantic_boost": 2070
+    },
+    {
+      "name": "语义权重=0.6",
+      "weight": 0.6,
+      "initial_n": 1200,
+      "final_n": 21978,
+      "growth_ratio": 18.315,
+      "n_cloned": 0,
+      "n_split": 20778,
+      "n_semantic_boost": 2113
+    }
+  ],
+  "kf_interval_ablation": [
+    {
+      "interval": 1,
+      "n_keyframes": 20,
+      "ate_before": 0.1421176642179489,
+      "ate_after": 0.08313436061143875,
+      "improvement_pct": 41.50314712524414
+    },
+    {
+      "interval": 3,
+      "n_keyframes": 7,
+      "ate_before": 0.131541445851326,
+      "ate_after": 0.10489430278539658,
+      "improvement_pct": 20.25760269165039
+    },
+    {
+      "interval": 5,
+      "n_keyframes": 4,
+      "ate_before": 0.1575116366147995,
+      "ate_after": 0.1439812183380127,
+      "improvement_pct": 8.590106964111328
+    }
+  ],
+  "gs_count_performance": [
+    {
+      "n_gaussians": 99,
+      "render_time_ms": 129.57072257995605,
+      "render_fps": 7.717792878579617
+    },
+    {
+      "n_gaussians": 198,
+      "render_time_ms": 163.65385055541992,
+      "render_fps": 6.110458120026689
+    },
+    {
+      "n_gaussians": 300,
+      "render_time_ms": 204.50329780578613,
+      "render_fps": 4.889896694720717
+    },
+    {
+      "n_gaussians": 498,
+      "render_time_ms": 246.06013298034668,
+      "render_fps": 4.064047222472533
+    }
+  ]
+}

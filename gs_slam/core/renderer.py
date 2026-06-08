@@ -24,6 +24,218 @@ from typing import Dict, Tuple, Optional
 from .camera import PinholeCamera
 
 
+def compute_psnr(pred: np.ndarray, gt: np.ndarray, max_val: float = 1.0) -> float:
+    """
+    计算PSNR (Peak Signal-to-Noise Ratio)
+    3DGS论文首要渲染质量指标
+    
+    Args:
+        pred: [H,W,C] 预测图像, float [0,1]
+        gt: [H,W,C] 真实图像, float [0,1]
+        max_val: 像素最大值
+    
+    Returns:
+        psnr: PSNR值(dB)
+    """
+    mse = np.mean((pred.astype(np.float64) - gt.astype(np.float64)) ** 2)
+    if mse < 1e-10:
+        return 100.0
+    return float(20 * np.log10(max_val / np.sqrt(mse)))
+
+
+def compute_ssim(pred: np.ndarray, gt: np.ndarray, 
+                 data_range: float = 1.0, 
+                 win_size: int = 11,
+                 channel_weights: tuple = (0.3, 0.59, 0.11)) -> float:
+    """
+    计算SSIM (Structural Similarity Index)
+    衡量感知质量的结构相似性
+    
+    基于: Wang et al., "Image Quality Assessment: From Error Visibility to Structural Similarity"
+    
+    Args:
+        pred: [H,W,C] 预测图像, float [0,1]
+        gt: [H,W,C] 真实图像, float [0,1]
+        data_range: 数据范围
+        win_size: 滑动窗口大小
+        channel_weights: RGB三通道权重
+    
+    Returns:
+        ssim: SSIM值 [0,1], 越高越好
+    """
+    if pred.shape != gt.shape:
+        min_h = min(pred.shape[0], gt.shape[0])
+        min_w = min(pred.shape[1], gt.shape[1])
+        pred = pred[:min_h, :min_w]
+        gt = gt[:min_h, :min_w]
+    
+    # 转换到float64精度
+    pred = pred.astype(np.float64)
+    gt = gt.astype(np.float64)
+    
+    # 动态范围
+    C1 = (0.01 * data_range) ** 2
+    C2 = (0.03 * data_range) ** 2
+    
+    # 高斯窗口
+    sigma = 1.5
+    x = np.arange(-(win_size//2), win_size//2 + 1, dtype=np.float64)
+    gauss = np.exp(-0.5 * (x / sigma) ** 2)
+    gauss = gauss / gauss.sum()
+    window = gauss[:, None] * gauss[None, :]
+    window = window[None, :, :, None]  # [1,H,W,1]
+    
+    # 逐通道计算
+    ssim_per_channel = []
+    for c in range(pred.shape[-1]):
+        if c >= 3:
+            break
+        pc = pred[:, :, c]
+        gc = gt[:, :, c]
+        
+        # 局部均值
+        mu1 = _conv2d(pc, window[0, :, :, 0])
+        mu2 = _conv2d(gc, window[0, :, :, 0])
+        
+        mu1_sq = mu1 ** 2
+        mu2_sq = mu2 ** 2
+        mu12 = mu1 * mu2
+        
+        # 局部方差和协方差
+        sigma1_sq = _conv2d(pc ** 2, window[0, :, :, 0]) - mu1_sq
+        sigma2_sq = _conv2d(gc ** 2, window[0, :, :, 0]) - mu2_sq
+        sigma12 = _conv2d(pc * gc, window[0, :, :, 0]) - mu12
+        
+        # SSIM
+        ssim_map = ((2 * mu12 + C1) * (2 * sigma12 + C2)) / \
+                   ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+        ssim_per_channel.append(np.mean(ssim_map))
+    
+    if len(ssim_per_channel) == 3:
+        return float(sum(w * s for w, s in zip(channel_weights, ssim_per_channel)))
+    elif len(ssim_per_channel) > 0:
+        return float(np.mean(ssim_per_channel))
+    return 0.0
+
+
+def _conv2d(img: np.ndarray, kernel: np.ndarray, mode: str = 'valid') -> np.ndarray:
+    """简化的2D卷积 (用于SSIM) - 纯numpy实现, 避免scipy/numpy版本不兼容"""
+    from numpy.fft import rfft2, irfft2
+    h, w = img.shape
+    kh, kw = kernel.shape
+    
+    # 使用FFT实现快速卷积 (reflect padding)
+    pad_h, pad_w = kh // 2, kw // 2
+    # 反射填充
+    img_padded = np.pad(img, ((pad_h, pad_h), (pad_w, pad_w)), mode='reflect')
+    
+    # FFT卷积
+    out_h = h + kh - 1
+    out_w = w + kw - 1
+    img_fft = np.fft.rfft2(img_padded, s=(out_h, out_w))
+    kernel_fft = np.fft.rfft2(kernel, s=(out_h, out_w))
+    result = np.fft.irfft2(img_fft * kernel_fft, s=(out_h, out_w))
+    
+    # 提取有效区域
+    start_h = kh - 1
+    start_w = kw - 1
+    return result[start_h:start_h + h, start_w:start_w + w].real
+
+
+def _bilinear_resize(img: np.ndarray, new_h: int, new_w: int) -> np.ndarray:
+    """纯numpy双线性下采样 (替代scipy.ndimage.zoom)"""
+    h, w = img.shape[:2]
+    if len(img.shape) == 3:
+        result = np.zeros((new_h, new_w, img.shape[2]), dtype=img.dtype)
+        for c in range(img.shape[2]):
+            result[:, :, c] = _bilinear_resize_2d(img[:, :, c], new_h, new_w)
+        return result
+    else:
+        return _bilinear_resize_2d(img, new_h, new_w)
+
+
+def _bilinear_resize_2d(img: np.ndarray, new_h: int, new_w: int) -> np.ndarray:
+    """单通道双线性下采样"""
+    h, w = img.shape
+    # 使用简单的区域平均池化 (处理下采样)
+    row_idx = np.linspace(0, h - 1, new_h)
+    col_idx = np.linspace(0, w - 1, new_w)
+    
+    row_lo = np.floor(row_idx).astype(int)
+    row_hi = np.minimum(row_lo + 1, h - 1)
+    col_lo = np.floor(col_idx).astype(int)
+    col_hi = np.minimum(col_lo + 1, w - 1)
+    
+    row_frac = row_idx - row_lo
+    col_frac = col_idx - col_lo
+    
+    result = np.zeros((new_h, new_w), dtype=img.dtype)
+    for i in range(new_h):
+        rf = row_frac[i]; rl = row_lo[i]; rh = row_hi[i]
+        for j in range(new_w):
+            cf = col_frac[j]; cl = col_lo[j]; ch = col_hi[j]
+            result[i, j] = (
+                (1 - rf) * (1 - cf) * img[rl, cl] +
+                (1 - rf) * cf * img[rl, ch] +
+                rf * (1 - cf) * img[rh, cl] +
+                rf * cf * img[rh, ch]
+            )
+    return result
+
+
+def compute_lpips_simple(pred: np.ndarray, gt: np.ndarray) -> float:
+    """
+    简化的LPIPS代理 (基于多尺度SSIM)
+    完整LPIPS需要预训练网络(AlexNet/VGG)，这里提供基于MS-SSIM的代理版本
+    
+    Args:
+        pred: [H,W,C] 预测图像
+        gt: [H,W,C] 真实图像
+    
+    Returns:
+        lpips_proxy: [0,1], 越低越好
+    """
+    # MS-SSIM作为代理 (多尺度计算)
+    scales = [1.0, 0.5, 0.25]
+    ssim_values = []
+    
+    h, w = pred.shape[:2]
+    for scale in scales:
+        if scale < 1.0:
+            new_h, new_w = int(h * scale), int(w * scale)
+            if new_h < 32 or new_w < 32:
+                break
+            # 纯numpy双线性下采样 (替代scipy.ndimage.zoom)
+            p_down = _bilinear_resize(pred, new_h, new_w)
+            g_down = _bilinear_resize(gt, new_h, new_w)
+            ssim_val = compute_ssim(p_down, g_down, win_size=7)
+        else:
+            ssim_val = compute_ssim(pred, gt, win_size=7)
+        ssim_values.append(ssim_val)
+    
+    if ssim_values:
+        return float(1.0 - np.mean(ssim_values))
+    return 0.0
+
+
+def compute_rendering_metrics(pred: np.ndarray, gt: np.ndarray) -> Dict[str, float]:
+    """
+    计算综合渲染质量指标
+    
+    Args:
+        pred: [H,W,C] 渲染图像, float [0,1]
+        gt: [H,W,C] 真实图像, float [0,1]
+    
+    Returns:
+        metrics: {psnr, ssim, lpips_proxy}
+    """
+    return {
+        'psnr': compute_psnr(pred, gt),
+        'ssim': compute_ssim(pred, gt),
+        'lpips_proxy': compute_lpips_simple(pred, gt)
+    }
+
+
 class SplatRenderer:
     """3DGS Tile-based Splat渲染器 (改进版)"""
 

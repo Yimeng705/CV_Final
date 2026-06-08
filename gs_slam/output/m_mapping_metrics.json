@@ -1,0 +1,11 @@
+{
+  "mapping_time_ms": 2.0058155059814453,
+  "density_control_time_ms": 3973.6273288726807,
+  "render_time_ms": 1376.3725757598877,
+  "render_quality_vs_baseline": {
+    "psnr": 13.274934022233769,
+    "ssim": 0.6649947812386535,
+    "lpips_proxy": 0.37849321150671533
+  },
+  "n_gaussians_final": 5000
+}

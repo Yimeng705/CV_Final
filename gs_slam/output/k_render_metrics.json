@@ -1,0 +1,10 @@
+{
+  "step1_render_quality": {
+    "psnr": 21.428863256342083,
+    "ssim": 0.8754303206333999,
+    "lpips_proxy": 0.1755571940246382
+  },
+  "render_time_ms": 224.1992950439453,
+  "rendered_pixels": 163757,
+  "n_gaussians": 300
+}

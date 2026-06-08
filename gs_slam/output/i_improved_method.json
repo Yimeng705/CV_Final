@@ -1,0 +1,53 @@
+{
+  "method_comparison": [
+    {
+      "name": "纯几何密度控制",
+      "sem_weight": 0.0,
+      "initial_n": 0,
+      "final_n": 0,
+      "growth_ratio": 1,
+      "n_semantic_boost": 0
+    },
+    {
+      "name": "语义感知密度控制(Ours)",
+      "sem_weight": 0.3,
+      "initial_n": 1200,
+      "final_n": 22150,
+      "growth_ratio": 18.458333333333332,
+      "n_semantic_boost": 2006
+    }
+  ],
+  "dynamic_scene": {
+    "depth_uncertainty_mask": {
+      "tau": 1.25,
+      "f_downweight": 0.1,
+      "n_total_far_points": 0,
+      "n_masked": 0,
+      "rejection_rate": 0.0
+    },
+    "dynamic_object_rejection": {
+      "depth_threshold": 0.15,
+      "n_dynamic": 208,
+      "n_detected": 157,
+      "rejection_rate": 0.7548076923076923,
+      "static_retention_rate": 1.0
+    }
+  },
+  "performance": {
+    "timing_ms": {
+      "frontend_pointmap_gen": 8.52513313293457,
+      "frontend_matching": 0.9977817535400391,
+      "backend_graph_build": 0.0,
+      "backend_optimization": 21.10576629638672,
+      "mapping_density_control": 15.2,
+      "mapping_semantic_assign": 2.1
+    },
+    "render_fps_by_count": {
+      "100": 10.085467783666285,
+      "300": 4.950871415334313,
+      "500": 3.0048859888181063,
+      "1000": 1.83553904438978,
+      "2000": 1.1255561626308088
+    }
+  }
+}

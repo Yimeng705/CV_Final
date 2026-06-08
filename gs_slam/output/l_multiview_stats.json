@@ -1,0 +1,26 @@
+[
+  {
+    "degree": 0,
+    "rendered_pixels": 220852
+  },
+  {
+    "degree": 60,
+    "rendered_pixels": 171290
+  },
+  {
+    "degree": 120,
+    "rendered_pixels": 162282
+  },
+  {
+    "degree": 180,
+    "rendered_pixels": 149876
+  },
+  {
+    "degree": 240,
+    "rendered_pixels": 176655
+  },
+  {
+    "degree": 300,
+    "rendered_pixels": 180866
+  }
+]
