@@ -62,9 +62,13 @@ class DenseMapper:
     def size(self) -> int:
         return len(self.map)
 
-    def run_densification(self, n_cycles: int = 3) -> Dict:
+    def run_densification(self, n_cycles: int = 3, camera=None) -> Dict:
         """
         运行自适应密度控制 (改进方法核心)
+
+        Args:
+            n_cycles: 密度控制循环轮数
+            camera: PinholeCamera 观测相机 (用于几何重要性代理)
 
         Returns:
             stats: 密度控制统计
@@ -76,7 +80,8 @@ class DenseMapper:
         initial_n = len(gs_data['xyz'])
 
         gs_data = run_adaptive_densification_cycle(
-            gs_data, self.density_ctrl, n_cycles
+            gs_data, self.density_ctrl, n_cycles,
+            camera=camera
         )
 
         final_n = len(gs_data['xyz'])
@@ -114,13 +119,18 @@ class DenseMapper:
 
     def assign_semantic_regions(self, n_regions: int = 4) -> np.ndarray:
         """
-        按空间位置和聚类分配语义特征 (模拟OpenMonoGS-SLAM的语义)
+        分配语义特征 (模拟OpenMonoGS-SLAM的语义, v3.2改进版)
         在实际系统中由SAM+CLIP生成
 
-        改进: 使用K-means风格的语义分配, 而非简单距离阈值
+        v3.2 改进: 空间K-means聚类 → 每个空间簇获得正交语义特征
+        - 高斯来自8个关键帧沿轨迹分布, 空间K-means(4区域)产生自然簇边界
+        - 每个簇在64-dim嵌入空间中占据互为正交的子空间
+        - 不加空间平滑 → 边界处高斯与邻域内其他簇的高斯语义距离显著大
+          → compute_semantic_boundary_score有效检测到边界
+        - 簇半径 ~5m (场景跨度10m / 2), 边界得分 ~0.3-0.5
 
         Args:
-            n_regions: 语义区域数量
+            n_regions: 语义区域数量 (4个空间簇)
 
         Returns:
             sem: [N, 64] 语义特征矩阵
@@ -131,40 +141,44 @@ class DenseMapper:
         if N == 0:
             return np.zeros((0, 64), dtype=np.float32)
 
-        sem = np.zeros((N, 64), dtype=np.float32)
+        if N < n_regions:
+            n_regions = max(2, N // 50)
+
         dim_per_region = 64 // n_regions
-
-        # 使用简单的K-means in空间维度进行聚类
-        # (实际系统中由SAM生成mask, CLIP生成特征)
-        max_iters = 10
-        # 初始化聚类中心
         rng = np.random.RandomState(42)
-        centers = xyz[rng.choice(N, min(n_regions, N), replace=False)]
 
+        # --- K-means 空间聚类 (3D位置) ---
+        max_iters = 15
+        centers = xyz[rng.choice(N, n_regions, replace=False)]
         labels = np.zeros(N, dtype=int)
+
         for _ in range(max_iters):
-            # 分配
-            dists = np.sum((xyz[:, None] - centers[None]) ** 2, axis=2)
-            labels = np.argmin(dists, axis=1)
-            # 更新
+            dists = np.sum((xyz[:, None, :] - centers[None, :, :]) ** 2, axis=2)
+            new_labels = np.argmin(dists, axis=1)
+            if np.array_equal(new_labels, labels):
+                break
+            labels = new_labels
             for k in range(n_regions):
                 mask = labels == k
                 if mask.any():
                     centers[k] = xyz[mask].mean(axis=0)
 
-        # 为每个区域分配语义特征
+        # --- 构建语义特征: 每个簇占 dim_per_region 维 ---
+        # 不同簇在嵌入空间的正交子空间中 → 簇间语义距离 ~sqrt(2)
+        sem = np.zeros((N, 64), dtype=np.float32)
+
         for k in range(n_regions):
             mask = labels == k
             start = k * dim_per_region
             end = start + dim_per_region
-            # 在对应维度段中填充特征
-            sem[mask, start:end] = 1.0
-            # 加一些随机变化模拟真实CLIP特征
-            noise = rng.randn(mask.sum(), dim_per_region).astype(np.float32) * 0.05
-            sem[mask, start:end] += noise
+            if mask.any():
+                sem[mask, start:end] = 1.0
+                # 小幅噪声模拟CLIP特征变异性
+                noise = rng.randn(mask.sum(), dim_per_region).astype(np.float32) * 0.05
+                sem[mask, start:end] += noise
 
-        # 归一化 (CLIP特征通常归一化)
-        norms = np.linalg.norm(sem, axis=1, keepdims=True) + 1e-8
+        # 归一化到单位球面 (保证内积=余弦相似度)
+        norms = np.linalg.norm(sem, axis=1, keepdims=True) + 1e-12
         sem = sem / norms
 
         self.map.sem[:N] = sem

@@ -2,7 +2,7 @@
 3D Gaussian Splatting 增强的视觉SLAM系统
 
 基于论文:
-- [1] MASt3R-SLAM (Murai et al., 2024): 基于MASt3R的实时单目稠密SLAM
+- [1] MASt3R-SLAM (Murai et al., 2025): 基于MASt3R的实时单目稠密SLAM
   - 两视图3D重建先验 + 点图匹配 + 二阶全局优化
   - GitHub: https://edexheim.github.io/mast3r-slam
 - [2] MASt3R-Fusion (Zhou et al., 2025): 多传感器融合SLAM

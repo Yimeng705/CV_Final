@@ -1,17 +1,32 @@
 {
   "timing_ms": {
-    "frontend_pointmap_gen": 8.52513313293457,
-    "frontend_matching": 0.9977817535400391,
-    "backend_graph_build": 0.0,
-    "backend_optimization": 21.10576629638672,
-    "mapping_density_control": 15.2,
-    "mapping_semantic_assign": 2.1
+    "frontend_pointmap_gen": 6.033658981323242,
+    "frontend_matching": 1.0004043579101562,
+    "backend_graph_build": 1.001119613647461,
+    "backend_optimization": 22.284746170043945,
+    "mapping_semantic_assign": 2.345561981201172,
+    "mapping_density_control": 14.132499694824219
   },
   "render_fps_by_count": {
-    "100": 10.085467783666285,
-    "300": 4.950871415334313,
-    "500": 3.0048859888181063,
-    "1000": 1.83553904438978,
-    "2000": 1.1255561626308088
+    "100gs": {
+      "time_ms": 84.9,
+      "fps": 11.8
+    },
+    "300gs": {
+      "time_ms": 189.9,
+      "fps": 5.3
+    },
+    "500gs": {
+      "time_ms": 268.3,
+      "fps": 3.7
+    },
+    "1000gs": {
+      "time_ms": 824.3,
+      "fps": 1.2
+    },
+    "2000gs": {
+      "time_ms": 1556.4,
+      "fps": 0.6
+    }
   }
 }

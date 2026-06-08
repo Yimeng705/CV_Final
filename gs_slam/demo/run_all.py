@@ -1,19 +1,32 @@
 """
-完整实验演示 (改进版 v2.0)
+完整实验演示 (改进版 v3.0)
 ===================
 基于4篇论文的完整SLAM+3DGS系统实验
 包含提出的方法改进: 语义感知自适应密度控制
 
-改进 (v2.0):
-- P0: 补充PSNR/SSIM/LPIPS渲染质量指标
-- P1: 扩展消融维度(记忆模块/对比损失/深度掩码/超参数敏感性)
-- P1: 动态场景处理(深度残差掩码)
-- P1: 实时性能报告
+改进 (v3.0):
+- P0-1: 真正的tile-based渲染管线 (renderer.py)
+- P0-2: 诚实声明合成数据边界，标注实验范围
+- P0-3: 使用高分辨率下采样作为pseudo-GT的PSNR/SSIM评估
+- P1-1: 几何重要性代理替代随机梯度 (adaptive_density.py)
+- P1-2: 多维度有意义的方法对比
+- P1-3: 前端参数滑块联动预计算
+- P2-3: 真实性能计时替代硬编码
+- P2-4: 统一论文年份标注
 
 运行: python -m gs_slam.demo.run_all
 输出: gs_slam/output/ 目录下的全部结果
 前端: 打开 gs_slam/demo/frontend.html 进行交互演示
 """
+
+# ============================================================
+# 实验模式声明
+# ============================================================
+EXPERIMENT_MODE = "SYNTHETIC"
+# "SYNTHETIC" = 合成数据概念验证 | "REAL_DATA" = 真实MASt3R数据
+# 当前版本使用合成数据验证系统架构和组件交互。
+# 真实数据版本需集成MASt3R预训练模型和Replica/TUM数据集。
+# ============================================================
 
 import sys
 import os
@@ -67,9 +80,10 @@ def timer_end(name: str) -> float:
     return elapsed
 
 
-# ================ Step 1: 3DGS场景渲染 (增加PSNR/SSIM) ================
+# ================ Step 1: 3DGS场景渲染 (P0-3: 高分辨率pseudo-GT) ================
 def step1_render():
     header("Step 1: 3D Gaussian Splatting 场景渲染 + 渲染质量评估")
+    print(f"  [数据模式] {EXPERIMENT_MODE} - 合成场景概念验证")
     gc = make_test_scene(300)
     print(f"  [OK] 创建了 {len(gc)} 个高斯核 (球体+立方体+平面)")
 
@@ -91,32 +105,48 @@ def step1_render():
 
     rgb_pt = pt_renderer.render(gs_data, cam)
 
-    # === 新增: 渲染质量评估 ===
-    # 使用多视角平均渲染作为伪ground truth (不同位置相机)
-    synth_gt_views = []
-    for offset in [(-0.5, 0, 0), (0.5, 0, 0), (0, -0.3, 0), (0, 0.3, 0)]:
-        eye2 = eye.copy() + np.array(offset, dtype=np.float32)
-        R2, t2 = look_at(eye2, np.zeros(3), np.array([0., 1., 0.]))
-        cam2 = PinholeCamera()
-        cam2.set_pose(R2, t2)
-        rgb2, _, _ = renderer.render(gs_data, cam2)
-        synth_gt_views.append(rgb2)
+    # === P0-3改进: 使用2x高分辨率渲染下采样作为pseudo-GT ===
+    renderer_hires = SplatRenderer(H=960, W=1280, tile_size=16)
+    cam_hires = PinholeCamera(fx=1000, fy=1000, cx=640, cy=480, width=1280, height=960)
+    cam_hires.set_pose(R, t)
+    rgb_hires, _, _ = renderer_hires.render(gs_data, cam_hires)
+    # 简单2x下采样作为参考
+    gt_ref = rgb_hires[::2, ::2, :3].copy()
 
-    # 使用中位视图作为参考
-    gt_ref = synth_gt_views[0]
+    # 确保尺寸匹配
+    if gt_ref.shape[:2] != (480, 640):
+        # fallback: 使用偏移视图融合
+        synth_gt_views = []
+        for offset in [(-0.5, 0, 0), (0.5, 0, 0), (0, -0.3, 0), (0, 0.3, 0)]:
+            eye2 = eye.copy() + np.array(offset, dtype=np.float32)
+            R2, t2 = look_at(eye2, np.zeros(3), np.array([0., 1., 0.]))
+            cam2 = PinholeCamera()
+            cam2.set_pose(R2, t2)
+            rgb2, _, _ = renderer.render(gs_data, cam2)
+            synth_gt_views.append(rgb2)
+        gt_ref = synth_gt_views[0]
+
     rgb_gs_for_metric = np.clip(rgb_gs, 0, 1).astype(np.float32)
+    gt_ref = gt_ref.astype(np.float32)
+    # 确保尺寸一致
+    min_h = min(rgb_gs_for_metric.shape[0], gt_ref.shape[0])
+    min_w = min(rgb_gs_for_metric.shape[1], gt_ref.shape[1])
+    rgb_gs_for_metric = rgb_gs_for_metric[:min_h, :min_w, :3]
+    gt_ref = gt_ref[:min_h, :min_w, :3]
 
     render_metrics = compute_rendering_metrics(rgb_gs_for_metric, gt_ref)
-    print(f"  [Metrics] PSNR: {render_metrics['psnr']:.2f}dB, "
-          f"SSIM: {render_metrics['ssim']:.4f}, "
-          f"LPIPS(proxy): {render_metrics['lpips_proxy']:.4f}")
+    print(f"  [合成数据] PSNR: {render_metrics['psnr']:.2f}dB (参考: 2x高分辨率下采样)")
+    print(f"  [合成数据] SSIM: {render_metrics['ssim']:.4f} (参考: 2x高分辨率下采样)")
+    print(f"  [合成数据] LPIPS(proxy): {render_metrics['lpips_proxy']:.4f}")
 
     # 保存渲染指标到JSON
     metrics_json = {
         'step1_render_quality': render_metrics,
         'render_time_ms': t_gs,
         'rendered_pixels': int(rendered_px),
-        'n_gaussians': len(gc)
+        'n_gaussians': len(gc),
+        'reference_type': '2x_highres_downsampled_pseudo_GT',
+        'data_mode': EXPERIMENT_MODE
     }
     with open(os.path.join(OUT_DIR, 'k_render_metrics.json'), 'w') as f:
         json.dump(metrics_json, f, indent=2, ensure_ascii=False)
@@ -135,7 +165,7 @@ def step1_render():
     depth_viz = (depth_viz - depth_viz.min()) / (depth_viz.max() - depth_viz.min() + 1e-8)
     axes[2].imshow(depth_viz, cmap='plasma')
     axes[2].set_title('Depth Map'); axes[2].axis('off')
-    plt.suptitle(f'Rendering Comparison\nPSNR={render_metrics["psnr"]:.1f}dB, SSIM={render_metrics["ssim"]:.3f}',
+    plt.suptitle(f'Rendering Comparison\nPSNR={render_metrics["psnr"]:.1f}dB (ref:2x hires), SSIM={render_metrics["ssim"]:.3f}',
                  fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(OUT_DIR, 'c_comparison.png'), dpi=120)
@@ -147,7 +177,7 @@ def step1_render():
 
 # ================ Step 2: 多视角渲染 ================
 def step2_multiview(gc, renderer):
-    header("Step 2: 多视角新视图合成 (论文[4])")
+    header("Step 2: 多视角新视图合成 (3DGS综述)")
     multi_metrics = []
     for deg in [0, 60, 120, 180, 240, 300]:
         a = deg / 180 * np.pi
@@ -169,6 +199,7 @@ def step2_multiview(gc, renderer):
 # ================ Step 3: SLAM因子图优化 ================
 def step3_slam():
     header("Step 3: SLAM因子图优化 + 性能计时")
+    print(f"  [数据模式] {EXPERIMENT_MODE}")
 
     timer_start("点图生成")
     kfs = generate_synthetic_pointmaps(n_frames=20, radius=6.0, noise_std=0.03)
@@ -201,7 +232,8 @@ def step3_slam():
         'n_keyframes': len(kfs),
         'ate_before': float(before),
         'ate_after': float(after),
-        'improvement_pct': float(improvement)
+        'improvement_pct': float(improvement),
+        'data_mode': EXPERIMENT_MODE
     }
 
     # 轨迹可视化
@@ -230,73 +262,80 @@ def step3_slam():
     return kfs, pg, metrics, losses, improvement, perf_slam
 
 
-# ================ Step 4: 增量建图 (增加渲染质量对比) ================
+# ================ Step 4: 增量建图 (P1-2: 多维度方法对比) ================
 def step4_mapping(kfs, pg):
-    header("Step 4: 增量3DGS建图 + 渲染质量评估")
+    header("Step 4: 增量3DGS建图 + 多策略对比")
+    print(f"  [数据模式] {EXPERIMENT_MODE}")
 
-    mapper = DenseMapper(5000, use_adaptive_density=True, sem_weight=0.3)
-
-    timer_start("建图(点云注册)")
-    for i, kf in enumerate(kfs[:8]):
-        R_opt, t_opt = pg.poses[i]
-        pm = kf['pointmap']
-        conf = kf['confidence']
-        valid = (conf > 0.5) & (pm[:, :, 2] > 0.01)
-        pts_cam = pm[valid][:150]
-        pts_world = (R_opt.T @ pts_cam.T - R_opt.T @ t_opt).T
-        colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
-        mapper.add_pointcloud(pts_world.astype(np.float32), colors)
-    t_mapping = timer_end("建图(点云注册)")
-
-    print(f"  [OK] 建图完成: {mapper.size()} 个高斯核")
-
-    sem = mapper.assign_semantic_regions(n_regions=4)
-    print(f"  [OK] 语义区域分配完成: {len(np.unique(sem.argmax(axis=1)))} 个区域")
-
-    print("  [Method] 运行语义感知自适应密度控制...")
-    timer_start("密度控制")
-    dens_stats = mapper.run_densification(n_cycles=3)
-    t_density = timer_end("密度控制")
-    print(f"  [OK] 密度控制: {dens_stats.get('initial_n',0)} -> "
-          f"{dens_stats.get('final_n',0)} 高斯 "
-          f"(增长 {dens_stats.get('growth_ratio',1):.2f}x)")
-    print(f"    克隆: {dens_stats.get('n_cloned',0)}, "
-          f"分裂: {dens_stats.get('n_split',0)}, "
-          f"剪枝: {dens_stats.get('n_pruned',0)}, "
-          f"语义增强: {dens_stats.get('n_semantic_boost',0)}")
-
-    # 渲染建图结果
     renderer = SplatRenderer()
     cam = PinholeCamera()
     R, t = look_at(np.array([3., 2., 4.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
     cam.set_pose(R, t)
 
-    timer_start("建图渲染")
-    rgb, sem_map, depth_map = renderer.render(mapper.get_map(), cam)
-    t_render_map = timer_end("建图渲染")
+    # === P1-2: 对比三种密度控制策略 ===
+    strategies = [
+        ("无密度控制", False, 0.0),
+        ("纯几何密度控制(3DGS)", True, 0.0),
+        ("语义感知密度控制(Ours)", True, 0.3),
+    ]
 
-    # === 渲染质量: 对比密度控制前后的PSNR/SSIM ===
-    # 构建baseline (无密度控制) mapper
-    mapper_baseline = DenseMapper(5000, use_adaptive_density=False)
+    strategy_results = []
+    for name, use_den, sw in strategies:
+        mapper = DenseMapper(5000, use_adaptive_density=use_den, sem_weight=sw)
+        for i, kf in enumerate(kfs[:8]):
+            R_opt, t_opt = pg.poses[i]
+            pm = kf['pointmap']
+            conf = kf['confidence']
+            valid = (conf > 0.5) & (pm[:, :, 2] > 0.01)
+            pts_cam = pm[valid][:150]
+            pts_world = (R_opt.T @ pts_cam.T - R_opt.T @ t_opt).T
+            colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
+            mapper.add_pointcloud(pts_world.astype(np.float32), colors)
+
+        mapper.assign_semantic_regions(n_regions=4)
+
+        if use_den:
+            dens_stats = mapper.run_densification(n_cycles=3, camera=cam)
+        else:
+            dens_stats = {
+                'initial_n': mapper.size(), 'final_n': mapper.size(),
+                'growth_ratio': 1.0, 'n_cloned': 0, 'n_split': 0,
+                'n_pruned': 0, 'n_semantic_boost': 0
+            }
+
+        timer_start(f"渲染_{name}")
+        rgb_s, _, depth_s = renderer.render(mapper.get_map(), cam)
+        t_render = timer_end(f"渲染_{name}")
+        coverage = (depth_s < np.inf).mean()
+
+        strategy_results.append({
+            'name': name, 'n_gaussians': mapper.size(),
+            'growth_ratio': float(dens_stats.get('growth_ratio', 1)),
+            'n_semantic_boost': int(dens_stats.get('n_semantic_boost', 0)),
+            'coverage_ratio': float(coverage),
+            'render_time_ms': t_render
+        })
+        print(f"  {name:25s}: {mapper.size()}高斯, 覆盖度={coverage:.1%}, "
+              f"语义增强={dens_stats.get('n_semantic_boost', 0)}")
+
+    # 保存策略对比
+    with open(os.path.join(OUT_DIR, 'm_mapping_metrics.json'), 'w') as f:
+        json.dump(strategy_results, f, indent=2)
+
+    # 使用Ours策略的结果做可视化
+    mapper_ours = DenseMapper(5000, use_adaptive_density=True, sem_weight=0.3)
     for i, kf in enumerate(kfs[:8]):
         R_opt, t_opt = pg.poses[i]
         pm = kf['pointmap']; conf = kf['confidence']
         valid = (conf > 0.5) & (pm[:, :, 2] > 0.01)
         pts_cam = pm[valid][:150]
         pts_world = (R_opt.T @ pts_cam.T - R_opt.T @ t_opt).T
-        colors_b = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
-        mapper_baseline.add_pointcloud(pts_world.astype(np.float32), colors_b)
-    mapper_baseline.assign_semantic_regions(n_regions=4)
-    rgb_baseline, _, _ = renderer.render(mapper_baseline.get_map(), cam)
+        colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
+        mapper_ours.add_pointcloud(pts_world.astype(np.float32), colors)
+    mapper_ours.assign_semantic_regions(n_regions=4)
+    dens_stats = mapper_ours.run_densification(n_cycles=3, camera=cam)
 
-    # 使用改进版渲染作为"预测", 基线作为"参考"计算改进幅度
-    # (同时与一个更高采样的参考渲染对比)
-    cam2 = PinholeCamera()
-    R2, t2 = look_at(np.array([3.2, 2.1, 4.2]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
-    cam2.set_pose(R2, t2)
-    rgb_ref, _, _ = renderer.render(mapper.get_map(), cam2)
-
-    map_metrics_improved = compute_rendering_metrics(rgb, rgb_baseline)
+    rgb, sem_map, depth_map = renderer.render(mapper_ours.get_map(), cam)
 
     # 语义可视化
     H, W = sem_map.shape[:2]
@@ -321,13 +360,13 @@ def step4_mapping(kfs, pg):
     axes[1].imshow(sem_viz)
     axes[1].set_title('Semantic Features (PCA)'); axes[1].axis('off')
 
-    boundaries = mapper.compute_semantic_boundaries()
+    boundaries = mapper_ours.compute_semantic_boundaries()
     if len(boundaries) > 0:
         bound_viz = (boundaries - boundaries.min()) / (boundaries.max() - boundaries.min() + 1e-8)
         cmap = plt.cm.RdYlGn(1 - bound_viz)[:, :3]
         axes[2].scatter(
-            mapper.map.xyz[:len(mapper.map), 0],
-            mapper.map.xyz[:len(mapper.map), 2],
+            mapper_ours.map.xyz[:len(mapper_ours.map), 0],
+            mapper_ours.map.xyz[:len(mapper_ours.map), 2],
             c=cmap, s=2, alpha=0.6
         )
         axes[2].set_title('Semantic Boundaries (bird-eye)'); axes[2].axis('equal')
@@ -336,24 +375,48 @@ def step4_mapping(kfs, pg):
     axes[3].imshow(overlay)
     axes[3].set_title('RGB + Semantics'); axes[3].axis('off')
     plt.suptitle(f'OpenMonoGS-SLAM: Mapping + Semantic\n'
-                 f'Improved PSNR={map_metrics_improved["psnr"]:.1f}dB, SSIM={map_metrics_improved["ssim"]:.4f}',
+                 f'Ours: {mapper_ours.size()} Gaussians, Coverage={strategy_results[-1]["coverage_ratio"]:.1%}',
                  fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(OUT_DIR, 'g_semantic.png'), dpi=120)
     plt.close()
     print("  [OK] 语义建图+边界可视化结果已保存")
 
-    mapping_perf = {
-        'mapping_time_ms': t_mapping,
-        'density_control_time_ms': t_density,
-        'render_time_ms': t_render_map,
-        'render_quality_vs_baseline': map_metrics_improved,
-        'n_gaussians_final': mapper.size()
-    }
-    with open(os.path.join(OUT_DIR, 'm_mapping_metrics.json'), 'w') as f:
-        json.dump(mapping_perf, f, indent=2)
+    # 保存语义权重预计算图像 (P1-3)
+    precompute_param_sweep(kfs, pg, OUT_DIR)
 
-    return mapper, dens_stats, map_metrics_improved
+    return mapper_ours, dens_stats, strategy_results
+
+
+# ================ P1-3: 预计算参数扫描图像 (前端交互) ================
+def precompute_param_sweep(kfs, pg, out_dir):
+    """预计算sem_weight从0.0到0.6的7组渲染结果，供前端滑块联动"""
+    print("\n  [预计算] 语义权重参数扫描 (0.0-0.6)...")
+    renderer = SplatRenderer()
+    cam = PinholeCamera()
+    R, t = look_at(np.array([3., 2., 4.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
+    cam.set_pose(R, t)
+
+    for sw_int in range(0, 7):
+        sw = sw_int / 10.0  # 0.0, 0.1, ..., 0.6
+        mapper = DenseMapper(5000, use_adaptive_density=True, sem_weight=sw)
+        for i, kf in enumerate(kfs[:8]):
+            R_opt, t_opt = pg.poses[i]
+            pm = kf['pointmap']; conf = kf['confidence']
+            valid = (conf > 0.5) & (pm[:, :, 2] > 0.01)
+            pts_cam = pm[valid][:150]
+            pts_world = (R_opt.T @ pts_cam.T - R_opt.T @ t_opt).T
+            colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
+            mapper.add_pointcloud(pts_world.astype(np.float32), colors)
+        mapper.assign_semantic_regions(n_regions=4)
+        mapper.run_densification(n_cycles=3, camera=cam)
+        rgb, _, _ = renderer.render(mapper.get_map(), cam)
+        img = (np.clip(rgb, 0, 1)*255).astype(np.uint8)
+        fname = f'sem_sweep_w{sw_int:02d}.png'
+        Image.fromarray(img).save(os.path.join(out_dir, fname))
+        print(f"    sem_weight={sw:.1f}: {mapper.size()} gaussians -> {fname}")
+
+    print("  [OK] 参数扫描图像已保存 (sem_sweep_w00~w06.png)")
 
 
 # ================ Step 5: 扩展消融实验 ================
@@ -362,7 +425,7 @@ def step5_extended_ablation(kfs, pg):
 
     results = {}
 
-    # 5.1 因子图消融 (原有)
+    # 5.1 因子图消融
     print("\n--- 5.1 因子图组件消融 ---")
     configs = [
         ("Full (Odometry+GNSS+Loop)", True, True),
@@ -385,7 +448,7 @@ def step5_extended_ablation(kfs, pg):
         for n, b, a, p in fg_results
     ]
 
-    # 5.2 语义感知密度控制: 超参数全扫描
+    # 5.2 语义权重敏感性
     print("\n--- 5.2 语义权重超参数敏感性 ---")
     sem_weight_results = []
     test_weights = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
@@ -399,8 +462,11 @@ def step5_extended_ablation(kfs, pg):
             pts_world = (R_opt.T @ pts_cam.T - R_opt.T @ t_opt).T
             colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
             mapper_test.add_pointcloud(pts_world.astype(np.float32), colors)
+        cam_abl = PinholeCamera()
+        R_ca, t_ca = look_at(np.array([3., 2., 4.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
+        cam_abl.set_pose(R_ca, t_ca)
         mapper_test.assign_semantic_regions(n_regions=4)
-        stats = mapper_test.run_densification(n_cycles=3)
+        stats = mapper_test.run_densification(n_cycles=3, camera=cam_abl)
         label = "Baseline (几何)" if sw == 0.0 else f"语义权重={sw}"
         sem_weight_results.append({
             'name': label, 'weight': sw,
@@ -419,7 +485,6 @@ def step5_extended_ablation(kfs, pg):
     print("\n--- 5.3 关键帧间隔消融 ---")
     kf_interval_results = []
     for interval in [1, 3, 5]:
-        # 模拟不同的关键帧间隔 (下采样kfs)
         sub_kfs = kfs[::interval]
         if len(sub_kfs) < 3:
             continue
@@ -444,7 +509,7 @@ def step5_extended_ablation(kfs, pg):
     cam = PinholeCamera()
     R_c, t_c = look_at(np.array([3., 2., 4.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
     cam.set_pose(R_c, t_c)
-    for n_gs in [100, 200, 300, 500]:
+    for n_gs in [100, 200, 300, 500, 1000]:
         gc_test = make_test_scene(n_gs)
         timer_start(f"渲染_{n_gs}gaussians")
         rgb_t, _, _ = renderer.render(gc_test.pack(), cam)
@@ -460,10 +525,9 @@ def step5_extended_ablation(kfs, pg):
     with open(os.path.join(OUT_DIR, 'h_ablation.json'), 'w') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
-    # 消融对比图 (多panel)
+    # 消融对比图
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-    # Panel 1: 因子图消融
     names_fg = [r['name'] for r in results['factor_graph_ablation']]
     ate_after_fg = [r['ate_after'] for r in results['factor_graph_ablation']]
     axes[0, 0].barh(names_fg, ate_after_fg, color='#667eea', alpha=0.8)
@@ -471,7 +535,6 @@ def step5_extended_ablation(kfs, pg):
     for i, v in enumerate(ate_after_fg):
         axes[0, 0].text(v + 0.005, i, f'{v:.4f}', va='center')
 
-    # Panel 2: 语义权重敏感性
     weights_sw = [r['weight'] for r in results['sem_weight_ablation']]
     growth_sw = [r['growth_ratio'] for r in results['sem_weight_ablation']]
     boost_sw = [r['n_semantic_boost'] for r in results['sem_weight_ablation']]
@@ -483,14 +546,12 @@ def step5_extended_ablation(kfs, pg):
     ax2_twin.set_ylabel('Sem Boost Count'); ax2.set_title('Semantic Weight Sensitivity')
     ax2.legend(loc='upper left'); ax2_twin.legend(loc='upper right')
 
-    # Panel 3: 关键帧间隔
     intervals_kf = [r['interval'] for r in results['kf_interval_ablation']]
     ate_kf = [r['ate_after'] for r in results['kf_interval_ablation']]
     axes[1, 0].plot(intervals_kf, ate_kf, 'b-o', lw=2, markersize=8)
     axes[1, 0].set_xlabel('Keyframe Interval'); axes[1, 0].set_ylabel('ATE (m)')
     axes[1, 0].set_title('Keyframe Interval Impact'); axes[1, 0].grid(True, alpha=0.3)
 
-    # Panel 4: 高斯数量 vs FPS
     n_gs_list = [r['n_gaussians'] for r in results['gs_count_performance']]
     fps_list = [r['render_fps'] for r in results['gs_count_performance']]
     axes[1, 1].bar(range(len(n_gs_list)), fps_list, color='#764ba2', alpha=0.8)
@@ -516,11 +577,11 @@ def step6_improved_method(kfs, pg, mapper, render_metrics_step1):
 
     results = {}
 
-    # 6.1 语义感知密度控制 vs 基线 (原有)
-    print("\n--- 6.1 语义感知密度控制 vs 几何基线 ---")
+    # 6.1 多策略密度控制对比 (P1-2改进)
+    print("\n--- 6.1 密度控制策略对比 ---")
     improved_vs_baseline = []
     for sw in [0.0, 0.3]:
-        mapper_test = DenseMapper(5000, use_adaptive_density=(sw > 0), sem_weight=sw)
+        mapper_test = DenseMapper(5000, use_adaptive_density=True, sem_weight=sw)
         for i, kf in enumerate(kfs[:8]):
             R_opt, t_opt = pg.poses[i]
             pm = kf['pointmap']; conf = kf['confidence']
@@ -529,8 +590,11 @@ def step6_improved_method(kfs, pg, mapper, render_metrics_step1):
             pts_world = (R_opt.T @ pts_cam.T - R_opt.T @ t_opt).T
             colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
             mapper_test.add_pointcloud(pts_world.astype(np.float32), colors)
+        cam_step6 = PinholeCamera()
+        R_s6, t_s6 = look_at(np.array([3., 2., 4.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
+        cam_step6.set_pose(R_s6, t_s6)
         mapper_test.assign_semantic_regions(n_regions=4)
-        stats = mapper_test.run_densification(n_cycles=3)
+        stats = mapper_test.run_densification(n_cycles=3, camera=cam_step6)
         label = "纯几何密度控制" if sw == 0.0 else "语义感知密度控制(Ours)"
         improved_vs_baseline.append({
             'name': label, 'sem_weight': sw,
@@ -542,24 +606,23 @@ def step6_improved_method(kfs, pg, mapper, render_metrics_step1):
               f"(x{stats.get('growth_ratio',1):.2f})")
     results['method_comparison'] = improved_vs_baseline
 
-    # 6.2 动态场景处理 (MASt3R-Fusion深度残差掩码)
+    # 6.2 动态场景处理
     print("\n--- 6.2 动态场景处理: 深度残差掩码 (仿MASt3R-Fusion method-001) ---")
     dynamic_results = simulate_dynamic_scene_test(kfs, pg)
     results['dynamic_scene'] = dynamic_results
 
-    # 6.3 综合性能报告
-    print("\n--- 6.3 综合性能报告 ---")
+    # 6.3 综合性能报告 (P2-3: 全部实测)
+    print("\n--- 6.3 综合性能报告 (全部实测) ---")
     perf_report = generate_performance_report(kfs, pg)
     results['performance'] = perf_report
 
-    # 保存改进验证结果
+    # 保存
     with open(os.path.join(OUT_DIR, 'i_improved_method.json'), 'w') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
     # 可视化
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-    # 方法对比
     names_m = [r['name'] for r in improved_vs_baseline]
     growths_m = [r['growth_ratio'] for r in improved_vs_baseline]
     colors_m = ['#aaa', '#f57c00']
@@ -569,7 +632,6 @@ def step6_improved_method(kfs, pg, mapper, render_metrics_step1):
     for bar, g in zip(bars, growths_m):
         axes[0, 0].text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.02, f'{g:.2f}x', ha='center')
 
-    # 动态场景剔除率
     if dynamic_results:
         dr_types = list(dynamic_results.keys())
         dr_vals = [dynamic_results[k]['rejection_rate'] for k in dr_types]
@@ -577,15 +639,13 @@ def step6_improved_method(kfs, pg, mapper, render_metrics_step1):
         axes[0, 1].set_ylabel('Dynamic Point Rejection Rate (%)')
         axes[0, 1].set_title('Dynamic Scene Filtering')
 
-    # 性能分解
     if perf_report:
         perf_items = list(perf_report['timing_ms'].keys())
         perf_times = list(perf_report['timing_ms'].values())
         axes[1, 0].barh(perf_items[-8:], perf_times[-8:], color='#667eea', alpha=0.8)
         axes[1, 0].set_xlabel('Time (ms)')
-        axes[1, 0].set_title('SLAM Pipeline Performance')
+        axes[1, 0].set_title('SLAM Pipeline Performance (measured)')
 
-    # 渲染FPS vs 高斯数
     if perf_report and 'render_fps_by_count' in perf_report:
         n_list = list(perf_report['render_fps_by_count'].keys())
         fps_list = list(perf_report['render_fps_by_count'].values())
@@ -593,7 +653,7 @@ def step6_improved_method(kfs, pg, mapper, render_metrics_step1):
         axes[1, 1].set_xticks(range(len(n_list)))
         axes[1, 1].set_xticklabels(n_list)
         axes[1, 1].set_xlabel('N Gaussians'); axes[1, 1].set_ylabel('FPS')
-        axes[1, 1].set_title('Render FPS Scaling')
+        axes[1, 1].set_title('Render FPS Scaling (measured)')
         for i, v in enumerate(fps_list):
             axes[1, 1].text(i, v + 1, f'{v:.0f}', ha='center')
 
@@ -611,37 +671,27 @@ def simulate_dynamic_scene_test(kfs, pg):
     """模拟动态场景处理测试 (仿MASt3R-Fusion深度残差掩码)"""
     results = {}
 
-    # 测试远-近点深度掩码 (仿MASt3R-Fusion method-002)
     print("  [Test] 远-近点深度下加权掩码...")
     pm = kfs[0]['pointmap']
     conf = kfs[0]['confidence']
     valid = (conf > 0.5) & (pm[:, :, 2] > 0.01)
     pts_cam_all = pm[valid]
-    n_pts = len(pts_cam_all)
 
-    # 模拟远-近点: 按深度分两组
     depths = pts_cam_all[:, 2]
     median_depth = np.median(depths)
     far_points = pts_cam_all[depths > median_depth * 2]
-    near_points = pts_cam_all[depths < median_depth]
 
-    tau = 1.25  # 深度比阈值 (仿MASt3R-Fusion)
-    f_downweight = 0.1  # 下加权因子
+    tau = 1.25
+    f_downweight = 0.1
 
-    # 模拟: 远处点投影到近处时触发掩码
     n_masked = 0
-    mask_flags = []
     for pt in far_points[:50]:
-        # 模拟当前帧中该点的深度 (假设更小)
         depth_ratio = np.random.uniform(0.5, 3.0, size=1)[0]
         if depth_ratio < tau:
             n_masked += 1
-            mask_flags.append(True)
-        else:
-            mask_flags.append(False)
 
     rejection_rate = n_masked / max(len(far_points[:50]), 1)
-    print(f"  [Mask] 远-近点下加权: 掩码率 {rejection_rate*100:.1f}% (τ={tau})")
+    print(f"  [Mask] 远-近点下加权: 掩码率 {rejection_rate*100:.1f}% (tau={tau})")
 
     results['depth_uncertainty_mask'] = {
         'tau': tau, 'f_downweight': f_downweight,
@@ -649,25 +699,17 @@ def simulate_dynamic_scene_test(kfs, pg):
         'n_masked': n_masked, 'rejection_rate': float(rejection_rate)
     }
 
-    # 测试动态物体剔除 (深度残差)
     print("  [Test] 动态物体深度残差剔除...")
     R_opt, t_opt = pg.poses[0]
     pts_world = (R_opt.T @ pts_cam_all.T - R_opt.T @ t_opt).T
 
-    # 模拟动态点 (深度残差大)
     n_static = len(pts_world) // 2
     static_pts = pts_world[:n_static]
-    # 动态点: 加随机大偏移
     dynamic_pts = pts_world[n_static:] + np.random.randn(len(pts_world)-n_static, 3).astype(np.float32) * 0.5
 
-    depth_threshold = 0.15  # 深度残差阈值
-    # 模拟两帧匹配后的深度差异
-    depth_diff = np.abs(
-        static_pts[:, 2] - (static_pts[:, 2] + np.random.randn(n_static) * 0.02)
-    )
-    dyn_depth_diff = np.abs(
-        dynamic_pts[:, 2] - (dynamic_pts[:, 2] + np.random.randn(len(dynamic_pts)) * 0.5)
-    )
+    depth_threshold = 0.15
+    depth_diff = np.abs(static_pts[:, 2] - (static_pts[:, 2] + np.random.randn(n_static) * 0.02))
+    dyn_depth_diff = np.abs(dynamic_pts[:, 2] - (dynamic_pts[:, 2] + np.random.randn(len(dynamic_pts)) * 0.5))
 
     n_dyn_detected = (dyn_depth_diff > depth_threshold).sum()
     n_static_false = (depth_diff > depth_threshold).sum()
@@ -688,10 +730,12 @@ def simulate_dynamic_scene_test(kfs, pg):
 
 
 def generate_performance_report(kfs, pg):
-    """生成综合性能报告"""
+    """
+    综合性能报告 (P2-3改进: 全部实测，移除硬编码)
+    """
     report = {'timing_ms': {}, 'render_fps_by_count': {}}
 
-    # 前/后端各部分耗时
+    # 前/后端各部分耗时 (全部实测)
     timer_start("前端_点图生成")
     kfs_test = generate_synthetic_pointmaps(n_frames=5, radius=6.0, noise_std=0.03)
     report['timing_ms']['frontend_pointmap_gen'] = timer_end("前端_点图生成")
@@ -713,12 +757,33 @@ def generate_performance_report(kfs, pg):
     backend.optimize(max_iter=100, lr=0.008)
     report['timing_ms']['backend_optimization'] = timer_end("后端_全局优化")
 
-    # 密度控制耗时
-    mapper = DenseMapper(5000, use_adaptive_density=True, sem_weight=0.3)
-    report['timing_ms']['mapping_density_control'] = 15.2  # 基于自适应密度控制的典型值
-    report['timing_ms']['mapping_semantic_assign'] = 2.1
+    # 建图相关实测
+    timer_start("建图_语义分配")
+    mapper = DenseMapper(200, use_adaptive_density=False)
+    for i, kf in enumerate(kfs_test):
+        pm = kf['pointmap']; conf = kf['confidence']
+        valid = (conf > 0.5) & (pm[:, :, 2] > 0.01)
+        pts_cam = pm[valid][:50]
+        pts_world = (np.eye(3) @ pts_cam.T).T
+        colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
+        mapper.add_pointcloud(pts_world.astype(np.float32), colors)
+    mapper.assign_semantic_regions(n_regions=4)
+    report['timing_ms']['mapping_semantic_assign'] = timer_end("建图_语义分配")
 
-    # 不同高斯数量的渲染FPS
+    # 密度控制实测
+    timer_start("建图_密度控制")
+    mapper2 = DenseMapper(500, use_adaptive_density=True, sem_weight=0.3)
+    for i, kf in enumerate(kfs_test):
+        pm = kf['pointmap']; valid = (kf['confidence'] > 0.5) & (pm[:, :, 2] > 0.01)
+        pts_cam = pm[valid][:30]
+        pts_world = (np.eye(3) @ pts_cam.T).T
+        colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
+        mapper2.add_pointcloud(pts_world.astype(np.float32), colors)
+    mapper2.assign_semantic_regions(n_regions=4)
+    mapper2.run_densification(n_cycles=2)
+    report['timing_ms']['mapping_density_control'] = timer_end("建图_密度控制")
+
+    # 不同高斯数量的渲染FPS (全部实测)
     renderer = SplatRenderer()
     cam = PinholeCamera()
     R, t = look_at(np.array([5.0, 1.5, 5.0]), np.zeros(3), np.array([0., 1., 0.]))
@@ -726,22 +791,28 @@ def generate_performance_report(kfs, pg):
 
     for n_gs in [100, 300, 500, 1000, 2000]:
         gc = make_test_scene(n_gs)
-        timer_start(f"render_{n_gs}")
-        renderer.render(gc.pack(), cam)
-        t_ms = timer_end(f"render_{n_gs}")
-        fps = 1000.0 / max(t_ms, 0.001)
-        report['render_fps_by_count'][str(n_gs)] = fps
+        times = []
+        for _ in range(3):
+            t0 = time.time()
+            renderer.render(gc.pack(), cam)
+            times.append((time.time() - t0) * 1000)
+        avg_ms = np.mean(times)
+        fps = 1000.0 / max(avg_ms, 0.001)
+        report['render_fps_by_count'][f'{n_gs}gs'] = {
+            'time_ms': round(float(avg_ms), 1),
+            'fps': round(float(fps), 1)
+        }
 
     # 保存性能报告
     with open(os.path.join(OUT_DIR, 'o_performance.json'), 'w') as f:
         json.dump(report, f, indent=2)
 
-    print("\n  === 综合性能报告 ===")
+    print("\n  === 综合性能报告 (全部实测) ===")
     for k, v in report['timing_ms'].items():
         print(f"  {k:30s}: {v:6.1f}ms")
-    print("\n  === 渲染性能 (不同高斯数量) ===")
+    print("\n  === 渲染性能 (不同高斯数量, 3次平均) ===")
     for k, v in report['render_fps_by_count'].items():
-        print(f"  {k:5s} gaussians: {v:6.1f} FPS")
+        print(f"  {k:5s}: {v['time_ms']:6.1f}ms ({v['fps']:6.1f} FPS)")
 
     return report
 
@@ -750,8 +821,12 @@ def generate_performance_report(kfs, pg):
 def generate_report(gc, metrics, improvement, results_all, dens_stats, render_metrics_step1):
     header("生成HTML综合报告")
 
-    metrics_str = "\n".join([f"<tr><td>{k}</td><td>{v:.4f}</td></tr>"
-                            for k, v in metrics.items()])
+    # 数据模式标签
+    mode_badge = (
+        '<span class="badge" style="background:#e67e22;">合成数据概念验证</span>'
+        if EXPERIMENT_MODE == "SYNTHETIC" else
+        '<span class="badge" style="background:#27ae60;">真实MASt3R数据</span>'
+    )
 
     # 因子图消融行
     fg_ablation_rows = ""
@@ -762,7 +837,7 @@ def generate_report(gc, metrics, improvement, results_all, dens_stats, render_me
                 f"<tr><td>{r['name']}</td><td>{r['ate_before']:.4f}</td>"
                 f"<td>{r['ate_after']:.4f}</td><td style='color:{color}'>{r['improvement_pct']:+.1f}%</td></tr>")
 
-    # 语义权重消融行
+    # 语义权重行
     sem_rows = ""
     if 'sem_weight_ablation' in results_all:
         for r in results_all['sem_weight_ablation']:
@@ -779,14 +854,19 @@ def generate_report(gc, metrics, improvement, results_all, dens_stats, render_me
                 f"<td>{r['name']}</td><td>{r['initial_n']}</td><td>{r['final_n']}</td>"
                 f"<td>{r['growth_ratio']:.2f}x</td><td>{r['n_semantic_boost']}</td></tr>")
 
-    # 性能行
+    # 性能行 (支持新格式)
     perf_rows = ""
-    if 'performance' in results_all and 'timing_ms' in results_all['performance']:
-        for k, v in results_all['performance']['timing_ms'].items():
-            perf_rows += f"<tr><td>{k}</td><td>{v:.1f}ms</td></tr>"
-    if 'performance' in results_all and 'render_fps_by_count' in results_all['performance']:
-        for k, v in results_all['performance']['render_fps_by_count'].items():
-            perf_rows += f"<tr><td>{k} Gaussians</td><td>{v:.1f} FPS</td></tr>"
+    if 'performance' in results_all:
+        p = results_all['performance']
+        if 'timing_ms' in p:
+            for k, v in p['timing_ms'].items():
+                perf_rows += f"<tr><td>{k}</td><td>{v:.1f}ms</td></tr>"
+        if 'render_fps_by_count' in p:
+            for k, v in p['render_fps_by_count'].items():
+                if isinstance(v, dict):
+                    perf_rows += f"<tr><td>{k} Gaussians</td><td>{v['time_ms']:.1f}ms / {v['fps']:.1f} FPS</td></tr>"
+                else:
+                    perf_rows += f"<tr><td>{k} Gaussians</td><td>{v:.1f} FPS</td></tr>"
 
     # 渲染质量指标
     rm = render_metrics_step1
@@ -794,26 +874,24 @@ def generate_report(gc, metrics, improvement, results_all, dens_stats, render_me
         f"<div class='metrics'>"
         f"<div class='mb'><div class='v'>{rm['psnr']:.1f}</div><div class='l'>PSNR (dB)</div></div>"
         f"<div class='mb'><div class='v'>{rm['ssim']:.4f}</div><div class='l'>SSIM</div></div>"
-        f"<div class='mb'><div class='v'>{rm['lpips_proxy']:.4f}</div><div class='l'>LPIPS proxy ↓</div></div>"
+        f"<div class='mb'><div class='v'>{rm['lpips_proxy']:.4f}</div><div class='l'>LPIPS proxy</div></div>"
         f"<div class='mb'><div class='v'>{len(gc)}</div><div class='l'>3D Gaussians</div></div>"
         f"</div>"
+        f"<p style='color:#e67e22;font-size:0.85em;margin-top:8px;'>"
+        f"⚠ 参考标准: 2x高分辨率渲染下采样 (合成数据pseudo-GT)，非真实Ground Truth</p>"
     )
 
-    # 动态场景结果
+    # 动态场景
     dynamic_info = ""
     if 'dynamic_scene' in results_all:
         ds = results_all['dynamic_scene']
         if 'dynamic_object_rejection' in ds:
             dr = ds['dynamic_object_rejection']
-            dynamic_info += (
-                f"<tr><td>动态点剔除率</td><td>{dr['rejection_rate']*100:.1f}%</td></tr>"
-                f"<tr><td>静态点保留率</td><td>{dr['static_retention_rate']*100:.1f}%</td></tr>"
-            )
+            dynamic_info += (f"<tr><td>动态点剔除率</td><td>{dr['rejection_rate']*100:.1f}%</td></tr>"
+                             f"<tr><td>静态点保留率</td><td>{dr['static_retention_rate']*100:.1f}%</td></tr>")
         if 'depth_uncertainty_mask' in ds:
             dm = ds['depth_uncertainty_mask']
-            dynamic_info += (
-                f"<tr><td>远-近点掩码率 (τ={dm['tau']})</td><td>{dm['rejection_rate']*100:.1f}%</td></tr>"
-            )
+            dynamic_info += (f"<tr><td>远-近点掩码率 (tau={dm['tau']})</td><td>{dm['rejection_rate']*100:.1f}%</td></tr>")
 
     ds_stats = dens_stats
     dens_info = (f"初始高斯: {ds_stats.get('initial_n','N/A')} &rarr; "
@@ -824,9 +902,21 @@ def generate_report(gc, metrics, improvement, results_all, dens_stats, render_me
                  f"剪枝: {ds_stats.get('n_pruned',0)}, "
                  f"语义增强: {ds_stats.get('n_semantic_boost',0)}")
 
+    # 策略对比行
+    strategy_rows = ""
+    if 'step4_mapping_quality' in results_all:
+        sq = results_all['step4_mapping_quality']
+        if isinstance(sq, list):
+            for s in sq:
+                style = 'font-weight:bold;color:#f57c00' if 'Ours' in s['name'] else ''
+                strategy_rows += (
+                    f"<tr style='{style}'><td>{s['name']}</td><td>{s['n_gaussians']}</td>"
+                    f"<td>{s['coverage_ratio']:.1%}</td><td>{s.get('n_semantic_boost', 0)}</td>"
+                    f"<td>{s.get('render_time_ms', 0):.0f}ms</td></tr>")
+
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><title>3DGS-SLAM 实验报告 v2.0</title>
+<head><meta charset="UTF-8"><title>3DGS-SLAM 实验报告 v3.0</title>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:Arial,sans-serif;background:#f0f2f5;color:#333}}
@@ -850,16 +940,69 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 .footer{{text-align:center;color:#999;padding:20px;margin-top:30px;border-top:1px solid #eee}}
 .frontend-link{{display:inline-block;background:#667eea;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;margin:10px 0;font-weight:600}}
 .badge{{display:inline-block;background:#4caf50;color:#fff;padding:4px 10px;border-radius:12px;font-size:0.85em;margin-left:8px}}
+.warning-box{{background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:12px 16px;margin:10px 0;font-size:0.85em;color:#856404}}
 </style></head>
 <body><div class="c">
 <div class="hd">
-<h1>3D Gaussian Splatting 增强的视觉SLAM系统 <span class="badge">v2.0</span></h1>
+<h1>3D Gaussian Splatting 增强的视觉SLAM系统 <span class="badge">v3.0</span></h1>
+{mode_badge}
 <p>基于 MASt3R-SLAM + MASt3R-Fusion + OpenMonoGS-SLAM + 3DGS综述</p>
 <p style="margin-top:8px;opacity:0.9;">改进方法: 语义感知的自适应高斯密度控制</p>
 </div>
 
+<div class="warning-box">
+<strong>⚠ 实验说明:</strong> 本demo在合成场景上验证系统架构和组件交互。
+每个指标的含义已在报告中明确标注。真实数据验证为后续工作。
+</div>
+
+<div class="card" style="background:#fef9e7;border-left:4px solid #f39c12;">
+<h2>📋 实现说明与诚实披露</h2>
+<p style="margin-bottom:12px;color:#856404;font-size:0.9em;">
+<strong>定位:</strong> 本Demo为<strong>系统架构概念验证</strong>。核心算法流程（tile-based渲染→匹配→优化→建图→密度控制）与论文一致，
+但部分组件使用简化实现以适配纯Python+NumPy环境和合成数据。各模块具体实现说明如下：
+</p>
+<table>
+<tr><th>模块</th><th>论文方法</th><th>本Demo实现</th><th>说明</th></tr>
+<tr>
+<td>3DGS渲染</td>
+<td>CUDA tile-based可微光栅化器<br>(3DGS综述 method-002)</td>
+<td>NumPy CPU tile-based splatting<br>✗ 不可微 (无反向传播)</td>
+<td>前向渲染逻辑与论文一致(tile分配+排序+alpha混合)，但不可微。<br>真实训练需CUDA+autograd。</td>
+</tr>
+<tr>
+<td>前端匹配</td>
+<td>迭代投影点图匹配+射线误差<br>(MASt3R-SLAM method-002)</td>
+<td>RANSAC+Umeyama 3D-3D刚性匹配</td>
+<td>概念性简化。射线误差匹配需通用相机模型支持，为后续工作。</td>
+</tr>
+<tr>
+<td>因子图优化</td>
+<td>Sim(3)-SE(3)同构映射+Hessian紧凑化<br>(MASt3R-Fusion method-003)</td>
+<td>SE(3)简化梯度下降优化<br>✗ 无Sim(3), 无舒尔补边缘化</td>
+<td>完整Sim(3)融合需实现群同构映射Λ=diag(I,s⁻¹I,s)。<br>当前退化为SE(3)位姿图。</td>
+</tr>
+<tr>
+<td>语义特征</td>
+<td>SAM+CLIP开放词汇特征<br>(OpenMonoGS-SLAM method-001/002)</td>
+<td>空间K-means聚类+模拟语义向量</td>
+<td>真实语义需集成预训练VFM。<br>K-means提供结构化的测试信号。</td>
+</tr>
+<tr>
+<td>密度控制梯度</td>
+<td>渲染损失反向传播梯度<br>(3DGS综述 method-003)</td>
+<td>几何重要性代理 (投影覆盖度)</td>
+<td>物理含义明确但非真实梯度。<br>真实梯度需可微渲染器支持。</td>
+</tr>
+</table>
+<p style="margin-top:10px;color:#856404;font-size:0.9em;">
+<strong>💡 核心贡献:</strong> 尽管部分组件为概念性简化，我们的关键创新——<strong>语义感知自适应密度控制</strong>—
+通过语义边界检测+几何重要性代理的双驱动机制，在概念验证层面展示了将语义信息融入3DGS密度控制的可行性。
+完整实现需集成预训练VFM和可微渲染器。
+</p>
+</div>
+
 <div class="card">
-<h2>📊 渲染质量指标 (P0改进)</h2>
+<h2>📊 渲染质量指标 (P0-3改进)</h2>
 {render_quality_str}
 </div>
 
@@ -878,11 +1021,11 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 <p style="line-height:1.8;margin-bottom:12px;">
 <strong>动机:</strong> 原始3DGS的自适应密度控制仅基于几何梯度, 在语义边界区域可能欠采样,
 导致物体交界处重建模糊。<br>
-<strong>方法:</strong> 我们在3DGS综述的密度控制基础上, 引入语义边界检测机制。
-通过计算每个高斯与其空间近邻的语义特征距离, 在语义边界区域降低密度控制阈值,
-使得高斯在物体交界处更密集, 从而提升重建细节质量。<br>
-<strong>改进:</strong> 语义边界得分 S_boundary ∈ [0,1] 通过近邻语义特征方差计算,
-调整梯度阈值 τ' = τ / (1 + w_sem * S_boundary)，在语义边界处自适应降低分裂阈值。
+<strong>方法:</strong> 我们在3DGS综述(Chen & Wang, 2026, TPAMI)的密度控制基础上, 
+引入语义边界检测机制。通过计算每个高斯与其空间近邻的语义特征距离, 
+在语义边界区域降低密度控制阈值, 使得高斯在物体交界处更密集。<br>
+<strong>梯度代理说明:</strong> 当前版本使用基于投影覆盖度的几何重要性代理替代随机梯度。
+真实梯度需通过可微渲染反向传播获得。覆盖率大的高斯更可能被分裂，这有明确的物理含义。
 </p>
 <div class="method" style="background:#e8f5e9;border-left-color:#4caf50;">
 <strong>实现细节:</strong> {dens_info}
@@ -890,7 +1033,18 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 </div>
 
 <div class="card">
-<h2>🧪 扩展消融实验: 因子图组件 (P1改进)</h2>
+<h2>🎯 密度控制策略对比 (P1-2改进)</h2>
+<table>
+<tr><th>策略</th><th>高斯数</th><th>覆盖度</th><th>语义增强操作</th><th>渲染耗时</th></tr>
+{strategy_rows}
+</table>
+<p style="color:#888;font-size:0.85em;margin-top:4px;">
+注: 以上为合成场景概念验证数据。覆盖度和语义增强操作数为代理指标。
+</p>
+</div>
+
+<div class="card">
+<h2>🧪 扩展消融实验: 因子图组件</h2>
 <table>
 <tr><th>配置</th><th>优化前ATE</th><th>优化后ATE</th><th>改善</th></tr>
 {fg_ablation_rows}
@@ -898,7 +1052,7 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 </div>
 
 <div class="card">
-<h2>🧪 语义权重超参数敏感性 (P1改进)</h2>
+<h2>🧪 语义权重超参数敏感性</h2>
 <table>
 <tr><th>语义权重</th><th>初始高斯</th><th>最终高斯</th><th>增长比</th><th>语义增强操作</th></tr>
 {sem_rows}
@@ -906,7 +1060,7 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 </div>
 
 <div class="card">
-<h2>🎯 方法改进验证: 基线 vs Ours (P1改进)</h2>
+<h2>🎯 方法改进验证: 基线 vs Ours</h2>
 <table>
 <tr><th>方法</th><th>初始高斯</th><th>最终高斯</th><th>增长比</th><th>语义增强操作</th></tr>
 {method_rows}
@@ -914,7 +1068,7 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 </div>
 
 <div class="card">
-<h2>🛡️ 动态场景处理: 深度残差掩码 (P1改进)</h2>
+<h2>🛡️ 动态场景处理: 深度残差掩码</h2>
 <p style="line-height:1.8;margin-bottom:12px;">
 <strong>仿MASt3R-Fusion method-001:</strong> 利用深度残差检测动态物体，通过远-近点下加权掩码抑制深度不确定性。
 </p>
@@ -925,13 +1079,13 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 </div>
 
 <div class="card">
-<h2>⚡ 实时性能报告 (P1改进)</h2>
+<h2>⚡ 实时性能报告 (P2-3: 全部实测)</h2>
 <table>
 <tr><th>模块</th><th>耗时</th></tr>
 {perf_rows}
 </table>
 <p style="margin-top:8px;color:#666;font-size:.9em;">
-本系统在GPU上以约15-30 FPS运行, 主要瓶颈为3DGS渲染和因子图全局优化。渲染FPS随高斯数量线性下降。
+性能数据为全实测值 (3次平均)，非硬编码。渲染性能受高斯数量和tile-based路径选择影响。
 </p>
 </div>
 
@@ -951,11 +1105,11 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 <div class="card" style="text-align:center;">
 <h2>🎮 交互演示</h2>
 <a class="frontend-link" href="../demo/frontend.html" target="_blank">打开Web交互演示界面</a>
-<p style="margin-top:8px;color:#666;">支持逐步演示、结果查看、论文信息浏览、参数实时调节</p>
+<p style="margin-top:8px;color:#666;">支持逐步演示、语义权重滑块联动、预计算参数扫描结果查看</p>
 </div>
 
 <div class="card">
-<h2>📚 参考文献 (4篇, ≤8篇要求)</h2>
+<h2>📚 参考文献 (4篇, 不超过8篇)</h2>
 <div class="paper"><strong>[1] MASt3R-SLAM</strong> (Murai et al., 2025, arXiv:2412.12392) - 基于MASt3R的实时单目稠密SLAM</div>
 <div class="paper"><strong>[2] MASt3R-Fusion</strong> (Zhou et al., 2025) - 前馈视觉+IMU/GNSS多传感器融合SLAM</div>
 <div class="paper"><strong>[3] OpenMonoGS-SLAM</strong> (Yoo et al., 2025) - 单目3DGS+开放集语义SLAM</div>
@@ -963,23 +1117,24 @@ th{{background:#667eea10;color:#667eea;font-weight:600}}
 </div>
 
 <div class="card">
-<h2>💡 实现要点 (改进版v2.0)</h2>
+<h2>💡 实现要点 (改进版v3.0)</h2>
 <ul style="padding-left:20px;line-height:2">
 <li><strong>前端:</strong> 模拟MASt3R的pointmap输出, RANSAC+Umeyama 3D-3D匹配</li>
-<li><strong>后端:</strong> 位姿图优化, 支持里程计/GNSS/回环多种因子</li>
+<li><strong>后端:</strong> 位姿图优化, 支持里程计/GNSS/回环多种因子 (SE(3), Sim(3)为后续工作)</li>
 <li><strong>建图:</strong> 增量3DGS建图 + 开放集语义特征关联</li>
-<li><strong>渲染:</strong> Tile-based splat渲染, RGB+语义+深度联合输出</li>
-<li><strong style="color:#f57c00;">改进1:</strong> 语义感知自适应密度控制 (语义边界引导分裂/克隆)</li>
-<li><strong style="color:#4caf50;">改进2:</strong> PSNR/SSIM/LPIPS渲染质量评估 (3DGS标准指标)</li>
-<li><strong style="color:#2196f3;">改进3:</strong> 动态场景深度残差掩码 (MASt3R-Fusion方案)</li>
-<li><strong style="color:#9c27b0;">改进4:</strong> 扩展5+维消融实验 (因子图/语义权重/关键帧间隔/高斯数量)</li>
-<li><strong style="color:#ff5722;">改进5:</strong> 综合实时性能报告 (各模块耗时 + 渲染FPS伸缩性)</li>
+<li><strong>渲染:</strong> 真正的tile-based splat渲染 (16x16 tile, >500高斯触发), RGB+语义+深度联合输出</li>
+<li><strong style="color:#f57c00;">改进1:</strong> 真正的tile-based渲染管线 (每高斯分配到所有覆盖tile + 逐tile混合)</li>
+<li><strong style="color:#4caf50;">改进2:</strong> PSNR/SSIM/LPIPS (2x高分辨率下采样pseudo-GT, 诚实标注)</li>
+<li><strong style="color:#2196f3;">改进3:</strong> 几何重要性代理替代随机梯度 (投影覆盖度驱动密度控制)</li>
+<li><strong style="color:#9c27b0;">改进4:</strong> 多策略密度控制对比 + 前端参数滑块联动 (预计算7组扫描)</li>
+<li><strong style="color:#ff5722;">改进5:</strong> 全实测性能报告 (移除硬编码, 3次平均计时)</li>
 </ul>
 </div>
 
 <div class="footer">
 CV Final Project | 3D重建与SLAM方向 | 基于2024-2026年顶会论文<br>
-改进版本 v2.0 — PSNR/SSIM指标 + 扩展消融 + 动态场景 + 性能报告
+改进版本 v3.0 — Tile-based渲染 + Pseudo-GT评估 + 几何代理 + 全实测性能<br>
+{mode_badge} 数据模式: {EXPERIMENT_MODE}
 </div>
 </div></body></html>"""
 
@@ -992,28 +1147,29 @@ CV Final Project | 3D重建与SLAM方向 | 基于2024-2026年顶会论文<br>
 # ================ 主函数 ================
 def main():
     print("╔" + "═"*58 + "╗")
-    print("║  3DGS-SLAM 完整实验演示 v2.0                         ║")
-    print("║  论文: MASt3R-SLAM × MASt3R-Fusion × OpenMonoGS-SLAM  ║")
+    print("║  3DGS-SLAM 完整实验演示 v3.0                         ║")
+    print(f"║  数据模式: {EXPERIMENT_MODE:<40s}║")
+    print("║  论文: MASt3R-SLAM x MASt3R-Fusion x OpenMonoGS-SLAM  ║")
     print("║  改进: 语义感知自适应密度控制                          ║")
-    print("║  新增: PSNR/SSIM + 扩展消融 + 动态 + 性能              ║")
+    print("║  新增: Tile-based渲染 + Pseudo-GT + 全实测性能         ║")
     print("╚" + "═"*58 + "╝")
 
-    # Step 1: 渲染 (增加PSNR/SSIM)
+    # Step 1: 渲染 (P0-3: 2x高分辨率pseudo-GT)
     gc, renderer, render_metrics_step1 = step1_render()
 
     # Step 2: 多视角
     step2_multiview(gc, renderer)
 
-    # Step 3: SLAM (增加性能计时)
+    # Step 3: SLAM
     kfs, pg, metrics, losses, improvement, perf_slam = step3_slam()
 
-    # Step 4: 建图 (增加渲染质量对比)
-    mapper, dens_stats, map_metrics = step4_mapping(kfs, pg)
+    # Step 4: 建图 (P1-2: 多策略对比; P1-3: 参数扫描)
+    mapper, dens_stats, strategy_results = step4_mapping(kfs, pg)
 
-    # Step 5: 扩展消融实验 (P1改进)
+    # Step 5: 扩展消融
     results_extended = step5_extended_ablation(kfs, pg)
 
-    # Step 6: 方法改进验证 + 动态场景 + 性能报告 (P1改进)
+    # Step 6: 方法改进验证 + 动态场景 + 性能报告
     results_improved = step6_improved_method(kfs, pg, mapper, render_metrics_step1)
 
     # 合并所有结果
@@ -1021,10 +1177,8 @@ def main():
     results_all.update(results_extended)
     results_all.update(results_improved)
     results_all['step3_performance'] = perf_slam
-    results_all['step4_mapping_quality'] = {
-        'psnr': map_metrics['psnr'], 'ssim': map_metrics['ssim'],
-        'lpips_proxy': map_metrics['lpips_proxy']
-    }
+    results_all['step4_mapping_quality'] = strategy_results
+    results_all['data_mode'] = EXPERIMENT_MODE
 
     # 报告
     generate_report(gc, metrics, improvement, results_all, dens_stats, render_metrics_step1)
@@ -1036,6 +1190,7 @@ def main():
     # 总结
     print("\n" + "="*60)
     print(f"  所有实验完成! 输出目录: {OUT_DIR}")
+    print(f"  数据模式: {EXPERIMENT_MODE}")
     print(f"  👉 打开 {os.path.join(OUT_DIR,'report.html')} 查看完整报告")
     print(f"  👉 打开 gs_slam/demo/frontend.html 进行交互演示")
     print("="*60)

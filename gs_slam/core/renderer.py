@@ -1,20 +1,23 @@
 """
-3DGS可微渲染器 (改进版)
+3DGS可微渲染器 (改进版 v3.0)
 ====================
-基于综述论文(Chen & Wang, 2024)的tile-based渲染管线，结合OpenMonoGS-SLAM的语义渲染。
+基于综述论文(Chen & Wang, 2026, TPAMI)的tile-based渲染管线，结合OpenMonoGS-SLAM的语义渲染。
 
 改进点:
 1. 真正的tile-based分块处理 (仿3DGS综述method-002)
+   1a. 屏幕划分为16x16 tile，每个高斯分配到覆盖的所有tile
+   1b. 逐tile深度排序 + 早期终止混合
+   1c. NumPy CPU实现，GPU加速版本需CUDA kernel
 2. 每个高斯基于真实协方差的2D投影 (Sigma2D = J W Sigma W^T J^T)
-3. 按深度全局排序 + 逐tile提前终止
+3. 智能渲染路径：高斯数>500时使用tile-based，否则fallback逐高斯
 4. 支持同步渲染RGB+语义+深度多通道
 5. 支持自适应密度控制的密度诊断输出
 
 核心流程:
 1. 视锥体裁剪 + 协方差投影
-2. tile分块分配高斯
-3. 深度排序
-4. Alpha blending (带提前终止)
+2. "每个高斯分配到所有覆盖的tile" (关键区别)
+3. 逐tile深度排序 (远处在前)
+4. 逐tile Alpha blending (带提前终止 T<0.001)
 5. 密度统计输出 (用于自适应控制)
 """
 
@@ -237,7 +240,17 @@ def compute_rendering_metrics(pred: np.ndarray, gt: np.ndarray) -> Dict[str, flo
 
 
 class SplatRenderer:
-    """3DGS Tile-based Splat渲染器 (改进版)"""
+    """
+    3DGS Tile-based Splat渲染器 (v3.0)
+    
+    实现真正的tile-based渲染管线 (仿3DGS综述 method-002):
+    1. 视锥体裁剪 + 2D协方差投影
+    2. 将每个高斯分配到覆盖的所有tile
+    3. 逐tile深度排序 (远处在前)
+    4. 逐tile alpha混合 (带T<0.001提前终止)
+    
+    注: NumPy CPU实现，GPU加速版本需CUDA kernel
+    """
 
     def __init__(self, H: int = 480, W: int = 640, tile_size: int = 16):
         self.H = H
@@ -246,6 +259,8 @@ class SplatRenderer:
         self.tiles_H = (H + tile_size - 1) // tile_size
         self.tiles_W = (W + tile_size - 1) // tile_size
         self.n_tiles = self.tiles_H * self.tiles_W
+        # 使用tile-based的阈值 (高斯数超过此值使用tile-based路径)
+        self.tile_based_threshold = 500
 
     def _project_covariance_2d(self, fx: float, fy: float, z: np.ndarray,
                                cov_3d: np.ndarray) -> np.ndarray:
@@ -260,15 +275,17 @@ class SplatRenderer:
         s2d[:, 0, 1] = cov_3d[:, 0, 1] * fx * fy / np.maximum(z * z, 0.01)
         return s2d
 
-    def render(self, gs: Dict[str, np.ndarray],
-               cam: PinholeCamera) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _compute_2d_projections(self, gs, cam):
         """
-        主渲染函数 (改进版)
-
+        计算所有高斯的2D投影参数
+        
         Returns:
-            rgb:  [H,W,3] float32 [0,1]
-            sem:  [H,W,D] float32 语义特征图
-            depth: [H,W] float32 深度图
+            u, v: [N] 像素坐标
+            depth: [N] 深度 (z_cam)
+            radius: [N] 3-sigma 2D半径 (int)
+            s_x, s_y: [N] 2D标准差
+            valid_idx: [N] 可见高斯的原始索引
+            (sem, rgb, opacity也对应裁剪)
         """
         xyz = gs['xyz']
         rgb = gs['rgb']
@@ -277,14 +294,6 @@ class SplatRenderer:
         sem = gs.get('sem', np.zeros((len(xyz), 64), dtype=np.float32))
         cov = gs.get('cov', np.zeros((len(xyz), 3, 3), dtype=np.float32))
 
-        N_total = len(xyz)
-        sem_dim = sem.shape[1] if len(sem.shape) > 1 else 64
-
-        if N_total == 0:
-            return (np.ones((self.H, self.W, 3), dtype=np.float32),
-                    np.zeros((self.H, self.W, sem_dim), dtype=np.float32),
-                    np.full((self.H, self.W), np.inf, dtype=np.float32))
-
         # 世界->相机
         pts_cam = (cam.R @ xyz.T + cam.t).T
         z = pts_cam[:, 2]
@@ -292,9 +301,7 @@ class SplatRenderer:
         # 视锥体裁剪
         ok = z > 0.1
         if not ok.any():
-            return (np.ones((self.H, self.W, 3), dtype=np.float32),
-                    np.zeros((self.H, self.W, sem_dim), dtype=np.float32),
-                    np.full((self.H, self.W), np.inf, dtype=np.float32))
+            return None
 
         z = z[ok]
         rgb = rgb[ok]
@@ -303,6 +310,7 @@ class SplatRenderer:
         sem = sem[ok]
         cov = cov[ok]
         pts_cam = pts_cam[ok]
+        valid_idx = np.where(ok)[0]
         N = len(z)
 
         # 投影到像素
@@ -321,10 +329,58 @@ class SplatRenderer:
             s_x = scale[:, 0] * fx / z
             s_y = scale[:, 1] * fy / z
 
-        radius = np.maximum(2, (np.maximum(s_x, s_y) * 3.0).astype(int))
+        # 确保最小半径, 限制最大半径
+        radius_float = np.maximum(s_x, s_y) * 3.0
+        radius = np.maximum(2, radius_float.astype(int))
         radius = np.minimum(radius, 200)
 
-        # 深度排序 (远处在前, 保证alpha混合正确)
+        return {
+            'u': u, 'v': v, 'depth': z, 'radius': radius,
+            's_x': s_x, 's_y': s_y,
+            'rgb': rgb, 'opacity': opacity, 'sem': sem,
+            'N': N, 'valid_idx': valid_idx
+        }
+
+    def _get_tile_range(self, ui: float, vi: float, r: int):
+        """
+        计算高斯(i)覆盖的tile索引范围
+        
+        注: 与原始per-Gaussian路径一致，这里返回像素patch的tile范围
+        """
+        y0 = max(0, int(vi) - r)
+        y1 = min(self.H, int(vi) + r + 1)
+        x0 = max(0, int(ui) - r)
+        x1 = min(self.W, int(ui) + r + 1)
+        
+        tile_y0 = y0 // self.tile_size
+        tile_y1 = min((y1 + self.tile_size - 1) // self.tile_size, self.tiles_H)
+        tile_x0 = x0 // self.tile_size
+        tile_x1 = min((x1 + self.tile_size - 1) // self.tile_size, self.tiles_W)
+        
+        tiles = []
+        for ty in range(tile_y0, tile_y1):
+            for tx in range(tile_x0, tile_x1):
+                tiles.append(ty * self.tiles_W + tx)
+        return tiles
+
+    def _render_naive(self, proj: dict, sem_dim: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Naive逐高斯渲染 (fallback路径，用于高斯数小于阈值时)
+        
+        保留原有逻辑但添加注释说明
+        """
+        u = proj['u']
+        v = proj['v']
+        z = proj['depth']
+        rgb = proj['rgb']
+        opacity = proj['opacity']
+        sem = proj['sem']
+        radius = proj['radius']
+        s_x = proj['s_x']
+        s_y = proj['s_y']
+        N = proj['N']
+
+        # 深度排序 (远处在前)
         order = np.argsort(-z)
         u = u[order]
         v = v[order]
@@ -336,11 +392,10 @@ class SplatRenderer:
         s_x = s_x[order]
         s_y = s_y[order]
 
-        # === Tile-based 渲染 (仿3DGS综述 method-002) ===
         img = np.ones((self.H, self.W, 3), dtype=np.float32)
         sem_img = np.zeros((self.H, self.W, sem_dim), dtype=np.float32)
         depth_img = np.full((self.H, self.W), np.inf, dtype=np.float32)
-        T = np.ones((self.H, self.W), dtype=np.float32)  # 累计透明度
+        T = np.ones((self.H, self.W), dtype=np.float32)
 
         for i in range(N):
             ui = int(round(u[i]))
@@ -358,43 +413,177 @@ class SplatRenderer:
             if y1 <= y0 or x1 <= x0:
                 continue
 
-            # 构建2D高斯核
             yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
             sx_val = max(s_x[i], 0.01)
             sy_val = max(s_y[i], 0.01)
 
-            # Gaussian: exp(-0.5 * ((x-u)^2/sx^2 + (y-v)^2/sy^2))
             g = np.exp(-0.5 * (((xx - ui) / sx_val) ** 2 +
                                ((yy - vi) / sy_val) ** 2))
             alpha = float(opacity[i]) * g
 
-            # 对patch进行alpha混合
             T_patch = T[y0:y1, x0:x1]
+            # 提前终止
+            active = T_patch > 0.001
+            if not active.any():
+                continue
+
             img_patch = img[y0:y1, x0:x1]
             sem_patch = sem_img[y0:y1, x0:x1]
             depth_patch = depth_img[y0:y1, x0:x1]
 
             alpha_3d = alpha[..., None]
-            # 提前终止: 只在累计透明度T > 0.001的像素处混合
-            active = T_patch > 0.001
+            img_patch[active] = (
+                img_patch[active] * (1 - alpha_3d[active]) +
+                rgb[i] * alpha_3d[active]
+            )
+            sem_patch[active] = (
+                sem_patch[active] * (1 - alpha_3d[active]) +
+                sem[i] * alpha_3d[active]
+            )
+            update_mask = active & (depth_patch == np.inf)
+            depth_patch[update_mask] = z[i]
+            T_patch[active] = T_patch[active] * (1 - alpha[active])
 
-            if active.any():
+        return (np.clip(img, 0, 1).astype(np.float32),
+                sem_img.astype(np.float32),
+                depth_img.astype(np.float32))
+
+    def _render_tile_based(self, proj: dict, sem_dim: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Tile-based渲染管线 (真正的3DGS综述method-002实现)
+        
+        步骤:
+        1. 将每个高斯分配到覆盖的所有tile
+        2. 每个tile内按深度排序
+        3. 逐tile alpha混合 (带提前终止)
+        
+        与naive路径的关键区别:
+        - 每个高斯可能属于多个tile (覆盖多个tile)
+        - 每个tile独立混合，互不干扰
+        - 理论上可以tile级并行 (GPU实现)
+        """
+        u = proj['u']
+        v = proj['v']
+        z = proj['depth']
+        rgb = proj['rgb']
+        opacity = proj['opacity']
+        sem = proj['sem']
+        radius = proj['radius']
+        s_x = proj['s_x']
+        s_y = proj['s_y']
+        N = proj['N']
+
+        # === Step 1: 将高斯分配到所有覆盖的tile ===
+        tile_gaussians = [[] for _ in range(self.n_tiles)]
+        for i in range(N):
+            tile_ids = self._get_tile_range(u[i], v[i], radius[i])
+            for tid in tile_ids:
+                tile_gaussians[tid].append(i)
+
+        # === Step 2 & 3: 每个tile内按深度排序 & 混合 ===
+        img = np.ones((self.H, self.W, 3), dtype=np.float32)
+        sem_img = np.zeros((self.H, self.W, sem_dim), dtype=np.float32)
+        depth_img = np.full((self.H, self.W), np.inf, dtype=np.float32)
+        T = np.ones((self.H, self.W), dtype=np.float32)
+
+        for tile_id in range(self.n_tiles):
+            tl = tile_gaussians[tile_id]
+            if not tl:
+                continue
+
+            # 按深度排序 (远处在前)
+            tl_sorted = sorted(tl, key=lambda i: -z[i])
+
+            # 计算tile像素范围
+            ty = tile_id // self.tiles_W
+            tx = tile_id % self.tiles_W
+            y0 = ty * self.tile_size
+            y1 = min(y0 + self.tile_size, self.H)
+            x0 = tx * self.tile_size
+            x1 = min(x0 + self.tile_size, self.W)
+
+            # 对tile内的每个高斯进行混合
+            for gi in tl_sorted:
+                ui = int(round(u[gi]))
+                vi = int(round(v[gi]))
+                r = int(radius[gi])
+
+                # 计算该高斯在当前tile内的像素范围
+                gy0 = max(y0, vi - r)
+                gy1 = min(y1, vi + r + 1)
+                gx0 = max(x0, ui - r)
+                gx1 = min(x1, ui + r + 1)
+
+                if gy1 <= gy0 or gx1 <= gx0:
+                    continue
+
+                yy, xx = np.mgrid[gy0:gy1, gx0:gx1].astype(np.float32)
+                sx_val = max(s_x[gi], 0.01)
+                sy_val = max(s_y[gi], 0.01)
+                g = np.exp(-0.5 * (((xx - ui) / sx_val) ** 2 +
+                                   ((yy - vi) / sy_val) ** 2))
+                alpha = float(opacity[gi]) * g
+
+                T_patch = T[gy0:gy1, gx0:gx1]
+                active = T_patch > 0.001
+                if not active.any():
+                    continue
+
+                img_patch = img[gy0:gy1, gx0:gx1]
+                sem_patch = sem_img[gy0:gy1, gx0:gx1]
+                depth_patch = depth_img[gy0:gy1, gx0:gx1]
+
+                alpha_3d = alpha[..., None]
                 img_patch[active] = (
                     img_patch[active] * (1 - alpha_3d[active]) +
-                    rgb[i] * alpha_3d[active]
+                    rgb[gi] * alpha_3d[active]
                 )
                 sem_patch[active] = (
                     sem_patch[active] * (1 - alpha_3d[active]) +
-                    sem[i] * alpha_3d[active]
+                    sem[gi] * alpha_3d[active]
                 )
-                # 记录最近深度 (首次写入)
                 update_mask = active & (depth_patch == np.inf)
-                depth_patch[update_mask] = z[i]
+                depth_patch[update_mask] = z[gi]
                 T_patch[active] = T_patch[active] * (1 - alpha[active])
 
         return (np.clip(img, 0, 1).astype(np.float32),
                 sem_img.astype(np.float32),
                 depth_img.astype(np.float32))
+
+    def render(self, gs: Dict[str, np.ndarray],
+               cam: PinholeCamera) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        主渲染函数 (v3.0 - 自适应渲染路径)
+
+        当高斯数>阈值时使用tile-based路径，否则使用naive路径。
+
+        Returns:
+            rgb:  [H,W,3] float32 [0,1]
+            sem:  [H,W,D] float32 语义特征图
+            depth: [H,W] float32 深度图
+        """
+        xyz = gs['xyz']
+        sem_dim = gs.get('sem', np.zeros((len(xyz), 64), dtype=np.float32)).shape[1] \
+                  if 'sem' in gs and len(gs['sem'].shape) > 1 else 64
+        N_total = len(xyz)
+
+        if N_total == 0:
+            return (np.ones((self.H, self.W, 3), dtype=np.float32),
+                    np.zeros((self.H, self.W, sem_dim), dtype=np.float32),
+                    np.full((self.H, self.W), np.inf, dtype=np.float32))
+
+        # 计算2D投影
+        proj = self._compute_2d_projections(gs, cam)
+        if proj is None:
+            return (np.ones((self.H, self.W, 3), dtype=np.float32),
+                    np.zeros((self.H, self.W, sem_dim), dtype=np.float32),
+                    np.full((self.H, self.W), np.inf, dtype=np.float32))
+
+        # 智能渲染路径选择
+        if proj['N'] > self.tile_based_threshold:
+            return self._render_tile_based(proj, sem_dim)
+        else:
+            return self._render_naive(proj, sem_dim)
 
     def render_rgb(self, gs: Dict[str, np.ndarray],
                    cam: PinholeCamera) -> np.ndarray:

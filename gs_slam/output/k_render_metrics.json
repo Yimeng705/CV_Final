@@ -1,10 +1,12 @@
 {
   "step1_render_quality": {
-    "psnr": 21.428863256342083,
-    "ssim": 0.8754303206333999,
-    "lpips_proxy": 0.1755571940246382
+    "psnr": 24.849036481564525,
+    "ssim": 0.9630659291141135,
+    "lpips_proxy": 0.04965664377679013
   },
-  "render_time_ms": 224.1992950439453,
+  "render_time_ms": 210.04319190979004,
   "rendered_pixels": 163757,
-  "n_gaussians": 300
+  "n_gaussians": 300,
+  "reference_type": "2x_highres_downsampled_pseudo_GT",
+  "data_mode": "SYNTHETIC"
 }

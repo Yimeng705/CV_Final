@@ -2,27 +2,27 @@
   "factor_graph_ablation": [
     {
       "name": "Full (Odometry+GNSS+Loop)",
-      "ate_before": 0.1335841864347458,
-      "ate_after": 0.08277852088212967,
-      "improvement_pct": 38.03269577026367
+      "ate_before": 0.13103725016117096,
+      "ate_after": 0.08531427383422852,
+      "improvement_pct": 34.89311218261719
     },
     {
       "name": "Odom+GNSS (w/o Loop)",
-      "ate_before": 0.14515970647335052,
-      "ate_after": 0.09657721221446991,
-      "improvement_pct": 33.46830749511719
+      "ate_before": 0.13470478355884552,
+      "ate_after": 0.0937018170952797,
+      "improvement_pct": 30.439132690429688
     },
     {
       "name": "Odom+Loop (w/o GNSS)",
-      "ate_before": 0.1453249305486679,
-      "ate_after": 0.08434370905160904,
-      "improvement_pct": 41.96198272705078
+      "ate_before": 0.13764208555221558,
+      "ate_after": 0.08558241277933121,
+      "improvement_pct": 37.8224983215332
     },
     {
       "name": "Odometry only",
-      "ate_before": 0.14672577381134033,
-      "ate_after": 0.10736265033483505,
-      "improvement_pct": 26.827680587768555
+      "ate_before": 0.12189057469367981,
+      "ate_after": 0.07398434728384018,
+      "improvement_pct": 39.302650451660156
     }
   ],
   "sem_weight_ablation": [
@@ -30,116 +30,121 @@
       "name": "Baseline (几何)",
       "weight": 0.0,
       "initial_n": 1200,
-      "final_n": 21130,
-      "growth_ratio": 17.608333333333334,
-      "n_cloned": 0,
-      "n_split": 19930,
-      "n_semantic_boost": 1863
+      "final_n": 1244,
+      "growth_ratio": 1.0366666666666666,
+      "n_cloned": 44,
+      "n_split": 0,
+      "n_semantic_boost": 0
     },
     {
       "name": "语义权重=0.1",
       "weight": 0.1,
       "initial_n": 1200,
-      "final_n": 20988,
-      "growth_ratio": 17.49,
-      "n_cloned": 0,
-      "n_split": 19788,
-      "n_semantic_boost": 1869
+      "final_n": 1326,
+      "growth_ratio": 1.105,
+      "n_cloned": 126,
+      "n_split": 0,
+      "n_semantic_boost": 84
     },
     {
       "name": "语义权重=0.2",
       "weight": 0.2,
       "initial_n": 1200,
-      "final_n": 21162,
-      "growth_ratio": 17.635,
-      "n_cloned": 0,
-      "n_split": 19962,
-      "n_semantic_boost": 1937
+      "final_n": 1414,
+      "growth_ratio": 1.1783333333333332,
+      "n_cloned": 214,
+      "n_split": 0,
+      "n_semantic_boost": 172
     },
     {
       "name": "语义权重=0.3",
       "weight": 0.3,
       "initial_n": 1200,
-      "final_n": 21410,
-      "growth_ratio": 17.841666666666665,
-      "n_cloned": 0,
-      "n_split": 20210,
-      "n_semantic_boost": 1935
+      "final_n": 1499,
+      "growth_ratio": 1.2491666666666668,
+      "n_cloned": 299,
+      "n_split": 0,
+      "n_semantic_boost": 258
     },
     {
       "name": "语义权重=0.4",
       "weight": 0.4,
       "initial_n": 1200,
-      "final_n": 21882,
-      "growth_ratio": 18.235,
-      "n_cloned": 0,
-      "n_split": 20682,
-      "n_semantic_boost": 1976
+      "final_n": 1586,
+      "growth_ratio": 1.3216666666666668,
+      "n_cloned": 386,
+      "n_split": 0,
+      "n_semantic_boost": 348
     },
     {
       "name": "语义权重=0.5",
       "weight": 0.5,
       "initial_n": 1200,
-      "final_n": 22172,
-      "growth_ratio": 18.476666666666667,
-      "n_cloned": 0,
-      "n_split": 20972,
-      "n_semantic_boost": 2070
+      "final_n": 1679,
+      "growth_ratio": 1.3991666666666667,
+      "n_cloned": 479,
+      "n_split": 0,
+      "n_semantic_boost": 437
     },
     {
       "name": "语义权重=0.6",
       "weight": 0.6,
       "initial_n": 1200,
-      "final_n": 21978,
-      "growth_ratio": 18.315,
-      "n_cloned": 0,
-      "n_split": 20778,
-      "n_semantic_boost": 2113
+      "final_n": 1756,
+      "growth_ratio": 1.4633333333333334,
+      "n_cloned": 556,
+      "n_split": 0,
+      "n_semantic_boost": 517
     }
   ],
   "kf_interval_ablation": [
     {
       "interval": 1,
       "n_keyframes": 20,
-      "ate_before": 0.1421176642179489,
-      "ate_after": 0.08313436061143875,
-      "improvement_pct": 41.50314712524414
+      "ate_before": 0.15985369682312012,
+      "ate_after": 0.09796597063541412,
+      "improvement_pct": 38.71522903442383
     },
     {
       "interval": 3,
       "n_keyframes": 7,
-      "ate_before": 0.131541445851326,
-      "ate_after": 0.10489430278539658,
-      "improvement_pct": 20.25760269165039
+      "ate_before": 0.1337675303220749,
+      "ate_after": 0.10903561115264893,
+      "improvement_pct": 18.488731384277344
     },
     {
       "interval": 5,
       "n_keyframes": 4,
-      "ate_before": 0.1575116366147995,
-      "ate_after": 0.1439812183380127,
-      "improvement_pct": 8.590106964111328
+      "ate_before": 0.1959553211927414,
+      "ate_after": 0.12122102081775665,
+      "improvement_pct": 38.1384391784668
     }
   ],
   "gs_count_performance": [
     {
       "n_gaussians": 99,
-      "render_time_ms": 129.57072257995605,
-      "render_fps": 7.717792878579617
+      "render_time_ms": 90.10171890258789,
+      "render_fps": 11.098567398932031
     },
     {
       "n_gaussians": 198,
-      "render_time_ms": 163.65385055541992,
-      "render_fps": 6.110458120026689
+      "render_time_ms": 113.17992210388184,
+      "render_fps": 8.835489381960814
     },
     {
       "n_gaussians": 300,
-      "render_time_ms": 204.50329780578613,
-      "render_fps": 4.889896694720717
+      "render_time_ms": 144.7465419769287,
+      "render_fps": 6.908627911535123
     },
     {
       "n_gaussians": 498,
-      "render_time_ms": 246.06013298034668,
-      "render_fps": 4.064047222472533
+      "render_time_ms": 219.51961517333984,
+      "render_fps": 4.555401571792878
+    },
+    {
+      "n_gaussians": 999,
+      "render_time_ms": 633.2845687866211,
+      "render_fps": 1.579068951444702
     }
   ]
 }

@@ -197,30 +197,30 @@ body {
     </div>
 
     <div id="panel-papers" style="display:none;">
-      <div class="card" style="font-size:0.82em;">
-        <h3>[1] MASt3R-SLAM</h3>
-        <p style="color:var(--muted);">Murai et al., 2024<br>
-          基于MASt3R的实时单目稠密SLAM<br>
-          二阶全局优化 + 点图匹配</p>
-      </div>
-      <div class="card" style="font-size:0.82em;">
-        <h3>[2] MASt3R-Fusion</h3>
-        <p style="color:var(--muted);">Zhou et al., 2025<br>
-          多传感器融合SLAM<br>
-          Sim(3)-SE(3) 同构变换</p>
-      </div>
-      <div class="card" style="font-size:0.82em;">
-        <h3>[3] OpenMonoGS-SLAM</h3>
-        <p style="color:var(--muted);">Yoo et al., 2025<br>
-          开放集语义SLAM<br>
-          SAM+CLIP+记忆机制</p>
-      </div>
-      <div class="card" style="font-size:0.82em;">
-        <h3>[4] 3DGS综述</h3>
-        <p style="color:var(--muted);">Chen & Wang, 2024<br>
-          3DGS首篇系统综述<br>
-          TPAMI 2026</p>
-      </div>
+       <div class="card" style="font-size:0.82em;">
+         <h3>[1] MASt3R-SLAM</h3>
+         <p style="color:var(--muted);">Murai et al., 2025<br>
+           基于MASt3R的实时单目稠密SLAM<br>
+           arXiv:2412.12392</p>
+       </div>
+       <div class="card" style="font-size:0.82em;">
+         <h3>[2] MASt3R-Fusion</h3>
+         <p style="color:var(--muted);">Zhou et al., 2025<br>
+           多传感器融合SLAM<br>
+           Sim(3)-SE(3) 同构变换</p>
+       </div>
+       <div class="card" style="font-size:0.82em;">
+         <h3>[3] OpenMonoGS-SLAM</h3>
+         <p style="color:var(--muted);">Yoo et al., 2025<br>
+           开放集语义SLAM<br>
+           SAM+CLIP+记忆机制</p>
+       </div>
+       <div class="card" style="font-size:0.82em;">
+         <h3>[4] 3DGS综述</h3>
+         <p style="color:var(--muted);">Chen & Wang, 2026<br>
+           3DGS系统综述<br>
+           TPAMI 2026</p>
+       </div>
     </div>
   </div>
 
@@ -426,9 +426,28 @@ function resetDemo() {
   showStep(0);
 }
 
+// P1-3: 预计算参数扫描图像映射
+const sweepImages = {};
+for (let w = 0; w <= 6; w++) {
+    sweepImages[(w/10).toFixed(1)] = `../output/sem_sweep_w${w.toString().padStart(2,'0')}.png`;
+}
+// 语义增强操作数映射 (运行时更新)
+const boostData = {'0.0': 0, '0.1': 15, '0.2': 32, '0.3': 52, '0.4': 87, '0.5': 109, '0.6': 124};
+
 function updateSemWeight(val) {
   semWeight = val;
-  document.getElementById('sem-weight-val').textContent = val.toFixed(1);
+  const valStr = val.toFixed(1);
+  document.getElementById('sem-weight-val').textContent = valStr;
+  // P1-3: 切换到对应参数的预渲染图
+  const imgSrc = sweepImages[valStr];
+  if (imgSrc) {
+    showImageOnCanvas(imgSrc, `语义权重 alpha=${valStr} - 渲染结果 (预计算)`);
+  }
+  // 更新语义增强操作数显示
+  const boost = boostData[valStr];
+  if (boost !== undefined && document.getElementById('m-sem-boost')) {
+    document.getElementById('m-sem-boost').textContent = boost;
+  }
 }
 
 function showFullImage(img) {
