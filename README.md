@@ -53,7 +53,7 @@
 
 | # | 论文 | 作者 | 发表时间 | 链接 | 代码 |
 |---|------|------|----------|------|------|
-| 1 | **MASt3R-SLAM**: Real-Time Monocular Dense SLAM from MASt3R | Riku Murai, Eric Dexheimer, Andrew J. Davison (Imperial College London) | 2024.12 | [arXiv:2412.12392](https://arxiv.org/abs/2412.12392) | [项目页](https://edexheim.github.io/mast3r-slam) | [📄 PDF](papers/MASt3R-SLAM.pdf) |
+ | 1 | **MASt3R-SLAM**: Real-Time Dense SLAM with 3D Reconstruction Priors | Riku Murai, Eric Dexheimer, Andrew J. Davison (Imperial College London) | 2025 | [arXiv:2412.12392](https://arxiv.org/abs/2412.12392) | [项目页](https://edexheim.github.io/mast3r-slam) | [📄 PDF](papers/MASt3R-SLAM.pdf) |
 | 2 | **MASt3R-Fusion**: Integrating Feed-Forward Visual Model with IMU, GNSS for High-Functionality SLAM | Yuxuan Zhou, Xingxing Li, Shengyu Li, et al. (Wuhan University) | 2025.09 | [arXiv:2509.20757](https://arxiv.org/abs/2509.20757) | [GREAT-WHU/MASt3R-Fusion](https://github.com/GREAT-WHU/MASt3R-Fusion) | [📄 PDF](papers/MASt3R-Fusion.pdf) |
 | 3 | **OpenMonoGS-SLAM**: Monocular Gaussian Splatting SLAM with Open-set Semantics | Jisang Yoo, Gyeongjin Kang, Hyun-kyu Ko, et al. (Sungkyunkwan University) | 2025.12 | [arXiv:2512.08625](https://arxiv.org/abs/2512.08625) | [jisang1528/OpenMonoGS-SLAM](https://jisang1528.github.io/OpenMonoGS-SLAM) | [📄 PDF](papers/OpenMonoGS-SLAM.pdf) |
 | 4 | **A Survey on 3D Gaussian Splatting** (综述) | Guikun Chen, Wenguan Wang (Zhejiang University) | 2024.01 | [arXiv:2401.03890](https://arxiv.org/abs/2401.03890) | [Awesome3DGS](https://github.com/guikunchen/Awesome3DGS) | [📄 PDF](papers/3DGS-Survey.pdf) |
@@ -64,11 +64,11 @@
 
 提出了一种**自底向上(Bottom-Up)**设计的实时单目稠密SLAM系统，核心思想是使用MASt3R作为"两视图3D重建与匹配先验"。系统包含：
 
-- **点图匹配**(Pointmap Matching)：使用MASt3R直接预测的稠密3D对应关系
-- **相机跟踪**(Camera Tracking)：基于3D-3D对齐的PnP+ICP混合方法
-- **局部融合**(Local Fusion)：帧到关键帧的点图融合
-- **图构建与回环**(Graph Construction & Loop Closure)：基于视觉特征的场景识别
-- **二阶全局优化**(Second-Order Global Optimization)：使用Schur补的高效BA
+- **点图匹配**(Pointmap Matching)：使用MASt3R直接预测的稠密3D对应关系，通过迭代投影匹配实现高速像素级对应搜索
+- **相机跟踪**(Camera Tracking)：基于射线误差(Ray Error)的Sim(3)位姿优化，对深度预测误差具有天然鲁棒性
+- **局部融合**(Local Fusion)：加权平均滤波将当前帧点图融合到规范关键帧点图中
+- **闭环检测**(Loop Closure)：增量式ASMK图像检索结合MASt3R几何匹配验证
+- **二阶全局优化**(Second-Order Global Optimization)：Sim(3)群上的高斯-牛顿法，利用解析雅可比与CUDA并行构建Hessian矩阵，通过稀疏Cholesky分解求解
 
 系统在无任何相机模型假设的情况下，达到了15 FPS的实时性能。
 
@@ -76,19 +76,22 @@
 
 将前馈视觉模型扩展到**多传感器融合**场景，核心创新包括：
 
-- **Sim(3)视觉约束**：以Hessian形式将MASt3R的pointmap匹配结果融入SE(3)因子图
-- **统一因子图**：同时优化视觉、IMU预积分、GNSS三种因子
-- **层次化设计**：实时滑动窗口局部优化 + 全局位姿图优化
-- **跨时间数据关联**：利用前馈模型的检索能力实现鲁棒的回环检测
+- **两视图稠密匹配与动态剔除**：MASt3R前馈模型回归点图与描述符，通过射线邻近匹配与深度残差掩码实现大视角稠密匹配，同时剔除动态物体
+- **Sim(3)视觉约束的Hessian压缩**：将稠密点图对齐残差（重投影误差+深度差）在GPU上压缩为紧凑的(7,7) Hessian矩阵和(7,1)向量，消除显式地标变量，大幅简化后端优化
+- **深度不确定性下加权掩码**：当投影后深度比值异常（(S∘X_j)_z < τ·(X_i)_z, τ=1.25）时对残差施加下加权因子f=0.1，抑制大场景前向运动中远→近点对的投影误差，提升VIO稳定性
+- **Sim(3)→SE(3)×R 群同构映射**：将相似变换分解为SE(3)运动+标量缩放，通过李代数间线性映射Λ将7维Sim(3)视觉约束转换为14维SE(3)+scale因子，实现视觉与IMU/GNSS度量尺度约束在统一因子图中的无缝融合
+- **层次化因子图**：实时滑动窗口（舒尔补概率边缘化）保留原始视觉Hessian与IMU预积分信息，全局阶段分步优化——先相对位姿回环约束+Cauchy鲁棒核排除外点，再将内点回环转换为Hessian形式进行精优化
+- **不确定性驱动回环过滤**：基于VIO里程计误差传播（沿/垂直方向协方差建模）快速排除几何上不可能共视的回环候选，保留激进真回环的同时大幅降低假阳性
 
 #### 论文3: OpenMonoGS-SLAM
 
-首个将**3D Gaussian Splatting与开放集语义**统一的单目SLAM系统：
+首个将**3D Gaussian Splatting与开放集语义**统一的单目SLAM系统，完全自监督，无需深度传感器或3D语义真值：
 
-- **VFMs集成**：MASt3R提供几何、SAM+CLIP提供语义
-- **自监督学习**：无需深度输入或3D语义真值
-- **记忆机制**：高效管理高维语义特征的存储与检索
-- **高斯语义特征图**：在3D高斯上关联可学习的语义嵌入向量
+- **VFMs集成**：MASt3R提供密集几何对应与初始位姿、SAM生成无类别2D掩码、CLIP提取语言特征
+- **记忆驱动的语义特征聚合**：维护动态记忆库累积历史帧的SAM掩码过滤后的CLIP特征，通过注意力融合克服单帧噪声，显著提升语义分割时空一致性
+- **多尺度语义监督**：在多个图像尺度（S=4）上同时计算语言回归损失，平衡大尺度整体一致性与小尺度边界细节
+- **多视图对比语义损失**：利用SAM掩码构建跨视图正/负样本对，采用InfoNCE对比学习强制跨视图语义不变性，消除单视图监督造成的空间碎片化
+- **可微渲染语义特征图**：在3D高斯上关联可学习的64维语义嵌入向量，通过alpha blending与RGB并行渲染，支持开放词汇语义查询
 
 #### 论文4: 3DGS综述
 
@@ -722,10 +725,10 @@ Copyright (c) 2025 — **MIT License**
 若使用本项目或参考相关工作，请引用：
 
 ```bibtex
-@misc{murai2024mast3rslam,
-  title={MASt3R-SLAM: Real-Time Monocular Dense SLAM from MASt3R},
+@misc{murai2025mast3rslam,
+  title={MASt3R-SLAM: Real-Time Dense SLAM with 3D Reconstruction Priors},
   author={Riku Murai and Eric Dexheimer and Andrew J. Davison},
-  year={2024}, eprint={2412.12392}, archivePrefix={arXiv}, primaryClass={cs.CV}
+  year={2025}, eprint={2412.12392}, archivePrefix={arXiv}, primaryClass={cs.CV}
 }
 
 @misc{zhou2025mast3rfusion,

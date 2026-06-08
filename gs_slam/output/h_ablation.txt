@@ -1,8 +1,8 @@
-Ablation Study Results
+Ablation Study Results (Factor Graph)
 ============================================================
-Configuration                    Before    After       жд%
+Configuration                    Before    After   Delta%
 ------------------------------------------------------------
-Full (Odometry+GNSS+Loop)        0.1284   0.0808   +37.1%
-Odom+GNSS (w/o Loop)             0.1627   0.1191   +26.8%
-Odom+Loop (w/o GNSS)             0.1276   0.0858   +32.8%
-Odometry only                    0.1418   0.1029   +27.4%
+Full (Odometry+GNSS+Loop)        0.1493   0.1104   +26.0%
+Odom+GNSS (w/o Loop)             0.1247   0.0854   +31.5%
+Odom+Loop (w/o GNSS)             0.1431   0.1040   +27.3%
+Odometry only                    0.1267   0.0828   +34.7%

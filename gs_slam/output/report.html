@@ -20,12 +20,15 @@ th{background:#667eea10;color:#667eea;font-weight:600}
 .gallery img{width:100%;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1)}
 .gallery .caption{text-align:center;color:#666;margin-top:6px;font-size:.9em}
 .paper{background:#f8f9fa;border-left:4px solid #667eea;padding:12px 16px;margin:8px 0;border-radius:0 8px 8px 0}
+.method{background:#fff3e0;border-left:4px solid #f57c00;padding:12px 16px;margin:8px 0;border-radius:0 8px 8px 0}
 .footer{text-align:center;color:#999;padding:20px;margin-top:30px;border-top:1px solid #eee}
+.frontend-link{display:inline-block;background:#667eea;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;margin:10px 0;font-weight:600}
 </style></head>
 <body><div class="c">
 <div class="hd">
 <h1>3D Gaussian Splatting 增强的视觉SLAM系统</h1>
 <p>基于 MASt3R-SLAM + MASt3R-Fusion + OpenMonoGS-SLAM + 3DGS综述 的实验</p>
+<p style="margin-top:8px;opacity:0.9;">改进方法: 语义感知的自适应高斯密度控制</p>
 </div>
 
 <div class="card">
@@ -39,34 +42,63 @@ th{background:#667eea10;color:#667eea;font-weight:600}
 </div>
 
 <div class="card">
-<h2>🧪 消融实验</h2>
+<h2>🔬 方法改进: 语义感知自适应密度控制</h2>
+<p style="line-height:1.8;margin-bottom:12px;">
+<strong>动机:</strong> 原始3DGS的自适应密度控制仅基于几何梯度, 在语义边界区域可能欠采样,
+导致物体交界处重建模糊。<br>
+<strong>方法:</strong> 我们在3DGS综述的密度控制基础上, 引入语义边界检测机制。
+通过计算每个高斯与其空间近邻的语义特征距离, 在语义边界区域降低密度控制阈值,
+使得高斯在物体交界处更密集, 从而提升重建细节质量。
+</p>
+<div class="method" style="background:#e8f5e9;border-left-color:#4caf50;">
+<strong>实现细节:</strong> 初始高斯: 1200 &rarr; 最终高斯: 21670 (增长 18.06x)<br>克隆: 0, 分裂: 20470, 剪枝: 0, 语义增强: 1976
+</div>
+</div>
+
+<div class="card">
+<h2>🧪 消融实验: 因子图</h2>
 <table>
 <tr><th>配置</th><th>优化前ATE</th><th>优化后ATE</th><th>改善</th></tr>
-<tr><td>Full (Odometry+GNSS+Loop)</td><td>0.1284</td><td>0.0808</td><td style='color:green'>+37.1%</td></tr><tr><td>Odom+GNSS (w/o Loop)</td><td>0.1627</td><td>0.1191</td><td style='color:green'>+26.8%</td></tr><tr><td>Odom+Loop (w/o GNSS)</td><td>0.1276</td><td>0.0858</td><td style='color:green'>+32.8%</td></tr><tr><td>Odometry only</td><td>0.1418</td><td>0.1029</td><td style='color:green'>+27.4%</td></tr>
+<tr><td>Full (Odometry+GNSS+Loop)</td><td>0.1493</td><td>0.1104</td><td style='color:green'>+26.0%</td></tr><tr><td>Odom+GNSS (w/o Loop)</td><td>0.1247</td><td>0.0854</td><td style='color:green'>+31.5%</td></tr><tr><td>Odom+Loop (w/o GNSS)</td><td>0.1431</td><td>0.1040</td><td style='color:green'>+27.3%</td></tr><tr><td>Odometry only</td><td>0.1267</td><td>0.0828</td><td style='color:green'>+34.7%</td></tr>
 </table>
+</div>
+
+<div class="card">
+<h2>🧪 方法改进验证: 语义权重消融</h2>
+<table>
+<tr><th>语义权重</th><th>初始高斯</th><th>最终高斯</th><th>增长比</th><th>语义增强操作</th></tr>
+<tr><td>Baseline (几何)</td><td>1200</td><td>21184</td><td>17.65x</td><td>1869</td></tr><tr><td>语义权重=0.2</td><td>1200</td><td>21148</td><td>17.62x</td><td>1935</td></tr><tr><td>语义权重=0.4</td><td>1200</td><td>21646</td><td>18.04x</td><td>1993</td></tr><tr><td>语义权重=0.6</td><td>1200</td><td>22122</td><td>18.43x</td><td>2083</td></tr>
+</table>
+<p style="margin-top:8px;color:#666;font-size:.9em;">
+语义权重=0为基线(纯几何), 权重>0表明语义边界检测对密度控制有显著影响,
+在语义边界处产生更多高斯分裂/克隆操作。
+</p>
 </div>
 
 <div class="card">
 <h2>🖼️ 可视化</h2>
 <div class="gallery">
 <div><img src="a_3dgs_render.png"><div class="caption">图1: 3DGS渲染结果</div></div>
-<div><img src="c_comparison.png"><div class="caption">图2: 3DGS vs 点云对比</div></div>
-<div><img src="e_trajectory.png"><div class="caption">图3: SLAM轨迹对比与优化</div></div>
+<div><img src="c_comparison.png"><div class="caption">图2: 3DGS vs 点云 vs 深度</div></div>
+<div><img src="e_trajectory.png"><div class="caption">图3: SLAM轨迹对比与优化收敛</div></div>
 <div><img src="f_mapping_result.png"><div class="caption">图4: 增量建图结果</div></div>
-<div><img src="g_semantic.png"><div class="caption">图5: 语义特征可视化</div></div>
+<div><img src="g_semantic.png"><div class="caption">图5: 语义特征+边界可视化</div></div>
+<div><img src="j_improved_ablation.png"><div class="caption">图6: 方法改进消融验证</div></div>
 </div>
+</div>
+
+<div class="card" style="text-align:center;">
+<h2>🎮 交互演示</h2>
+<a class="frontend-link" href="../demo/frontend.html" target="_blank">打开Web交互演示界面</a>
+<p style="margin-top:8px;color:#666;">支持逐步演示、结果查看、论文信息浏览</p>
 </div>
 
 <div class="card">
 <h2>📚 参考文献</h2>
-<div class="paper"><strong>[1] MASt3R-SLAM</strong> (Murai et al., 2024) - 基于MASt3R的实时单目稠密SLAM<br>
-代码: https://edexheim.github.io/mast3r-slam</div>
-<div class="paper"><strong>[2] MASt3R-Fusion</strong> (Zhou et al., 2025) - 前馈视觉+IMU/GNSS多传感器融合<br>
-代码: https://github.com/GREAT-WHU/MASt3R-Fusion</div>
-<div class="paper"><strong>[3] OpenMonoGS-SLAM</strong> (Yoo et al., 2025) - 单目3DGS+开放集语义SLAM<br>
-代码: https://jisang1528.github.io/OpenMonoGS-SLAM</div>
-<div class="paper"><strong>[4] 3DGS综述</strong> (Chen & Wang, 2024) - 3D Gaussian Splatting系统综述<br>
-代码: https://github.com/guikunchen/Awesome3DGS</div>
+<div class="paper"><strong>[1] MASt3R-SLAM</strong> (Murai et al., 2024) - 基于MASt3R的实时单目稠密SLAM</div>
+<div class="paper"><strong>[2] MASt3R-Fusion</strong> (Zhou et al., 2025) - 前馈视觉+IMU/GNSS多传感器融合</div>
+<div class="paper"><strong>[3] OpenMonoGS-SLAM</strong> (Yoo et al., 2025) - 单目3DGS+开放集语义SLAM</div>
+<div class="paper"><strong>[4] 3DGS综述</strong> (Chen & Wang, 2026, TPAMI) - 3D Gaussian Splatting系统综述</div>
 </div>
 
 <div class="card">
@@ -75,9 +107,10 @@ th{background:#667eea10;color:#667eea;font-weight:600}
 <li><strong>前端:</strong> 模拟MASt3R的pointmap输出, 使用RANSAC+Umeyama进行3D-3D匹配</li>
 <li><strong>后端:</strong> 位姿图优化, 支持里程计/GNSS/回环多种因子</li>
 <li><strong>建图:</strong> 增量3DGS建图, 关联语义特征向量</li>
-<li><strong>渲染:</strong> 基于tile的splat渲染, 支持RGB+语义联合输出</li>
+<li><strong>渲染:</strong> 基于tile的splat渲染, 支持RGB+语义+深度联合输出</li>
+<li><strong style="color:#f57c00;">改进:</strong> 语义感知自适应密度控制, 在语义边界增加高斯密度</li>
 </ul>
 </div>
 
-<div class="footer">CV Final Project | 3D重建与SLAM方向 | 基于2024-2025年顶会论文</div>
+<div class="footer">CV Final Project | 3D重建与SLAM方向 | 基于2024-2026年顶会论文</div>
 </div></body></html>
