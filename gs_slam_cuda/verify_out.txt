@@ -1,0 +1,23 @@
+PyTorch 2.7.0+cu128 CUDA 12.8
+
+--- Test A: Single Gaussian FP16 (verify no NaN) ---
+  coverage=83.6% NaN=False
+  PASS
+
+--- Test B: compute_rpe empty GT guard ---
+  empty GT: rpe_t=0.0, rpe_r=0.0
+  single GT: rpe_t=0.0, rpe_r=0.0
+  valid GT: rpe_t=0.0000, rpe_r=0.0000
+  PASS
+
+--- Test C: backend.evaluate_trajectory empty GT ---
+  metrics={'ate_rmse': 0.0, 'rpe_trans': 0.0, 'rpe_rot': 0.0, 'n_loop_closures': 0, 'n_keyframes': 2}
+  PASS
+
+--- Test D: create_test_scene 1200 Gaussians FP16 ---
+  coverage=80.6% NaN=False
+  PASS
+
+==================================================
+ALL FIXES VERIFIED SUCCESSFULLY
+==================================================

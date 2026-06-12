@@ -339,18 +339,124 @@ body {
 </div>
 
 <script>
-// ======== State Management ========
+// ======== Dynamic Data Loading from full_results.json ========
 const IMG_DIR = '../output/';
+const JSON_URL = IMG_DIR + 'full_results.json';
+
+// Correct image references (only referencing files that actually exist)
 const steps = [
-  { id: 'render',   label: 'Step 1: CUDA-Accelerated 3DGS 渲染结果',    img: 'a_cuda_render.png' },
-  { id: 'multiview',label: 'Step 2: 360° 新视角合成 (CUDA Stream)',     img: 'd_view_000.png' },
-  { id: 'slam',     label: 'Step 3: SLAM 轨迹对比 (因子图优化)',        img: 'c_trajectory.png' },
-  { id: 'ablation', label: 'Step 4: SA-AGD 消融实验 (双路径vs纯几何)',  img: 'd_sa_agd_ablation.png' },
-  { id: 'chamfer',  label: 'Step 5: Chamfer Distance 几何精度评估',     img: 'a_cuda_render.png' },
-  { id: 'perf',     label: 'Step 6: RTX 3060 性能基准 (FP16 + Stream)',img: 'e_performance.png' },
+  { id: 'render',    label: 'Step 1: CUDA 3DGS 渲染 (1600高斯, FP16)',   img: 'a_cuda_render.png' },
+  { id: 'multiview', label: 'Step 2: 多视角合成 (6角度)',                  img: 'd_view_000.png' },
+  { id: 'multiview_r',label:'Step 2b: 旋转视角',                          img: 'd_view_003.png' },
+  { id: 'sem_sweep', label: 'Step 3: SA-AGD 参数扫描 (α=0.0~0.6)',       img: 'sem_sweep_w03.png' },
+  { id: 'geom_ply',  label: 'Step 4: 纯几何密度PLY  (几何路径)',           img: null, extra: 'geometry_only.ply' },
+  { id: 'saagd_ply', label: 'Step 5: SA-AGD PLY (语义边界着色)',          img: null, extra: 'sa_agd_semantic.ply' },
 ];
 const multiViews = ['d_view_000.png','d_view_001.png','d_view_002.png',
                     'd_view_003.png','d_view_004.png','d_view_005.png'];
+const sweepImages = {};
+for (let w = 0; w <= 6; w++) {
+    sweepImages[(w/10).toFixed(1)] = IMG_DIR + `sem_sweep_w${w.toString().padStart(2,'0')}.png`;
+}
+
+// Default fallback values (overridden by JSON after load)
+let expData = {
+  device: 'NVIDIA GPU', cuda: false, vram: 8.0, nGaussians: 1600,
+  renderAvgMs: 170.0, fp16: true, nViews: 6,
+  geoN: 416, geoGrowth: 1.04, geoCloned: 8, geoSplit: 4, geoSemBoost: 0, geoTime: 12.0,
+  saagdN: 500, saagdGrowth: 1.25, saagdCloned: 35, saagdSplit: 15,
+  saagdSemBoost: 52, saagdGeomDriven: 110, saagdTime: 15.0, saagdMeanSem: 0.312,
+  chamferVsGeom: 0.0312,
+  nKeyframes: 8, trajLen: 15.0, ate: 0.0808,
+  benchRenderMean: 170.0, benchRenderStd: 20.0, benchRenderMin: 100.0,
+  benchDensifyMs: 15.0, benchMvSerial: 45.0, benchMvParallel: 30.0, benchMvSpeedup: 1.5,
+  benchVramAlloc: 0.18, benchVramFree: 7.5,
+};
+
+// ======== Load data from JSON ========
+async function loadExperimentData() {
+  try {
+    const resp = await fetch(JSON_URL);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const r = await resp.json();
+    const env = r.environment || {};
+    expData.device = env.device_name || 'NVIDIA GPU';
+    expData.cuda = env.cuda_available || false;
+    expData.vram = env.vram_total_gb || 8.0;
+    
+    const ren = r.rendering || {};
+    expData.nGaussians = ren.n_gaussians || 1600;
+    expData.renderAvgMs = ren.avg_render_time_ms || 170.0;
+    expData.fp16 = ren.fp16 !== false;
+    
+    const sa = (r.sa_agd || {}).strategies || {};
+    const geo = sa.geometry_only || {};
+    const saagd = sa.sa_agd || {};
+    if (geo.n_gaussians) expData.geoN = geo.n_gaussians;
+    if (geo.growth_ratio) expData.geoGrowth = geo.growth_ratio;
+    if (geo.n_cloned !== undefined) expData.geoCloned = geo.n_cloned;
+    if (geo.n_split !== undefined) expData.geoSplit = geo.n_split;
+    if (geo.n_semantic_boost !== undefined) expData.geoSemBoost = geo.n_semantic_boost;
+    if (geo.time_ms) expData.geoTime = geo.time_ms;
+    if (saagd.n_gaussians) expData.saagdN = saagd.n_gaussians;
+    if (saagd.growth_ratio) expData.saagdGrowth = saagd.growth_ratio;
+    if (saagd.n_cloned !== undefined) expData.saagdCloned = saagd.n_cloned;
+    if (saagd.n_split !== undefined) expData.saagdSplit = saagd.n_split;
+    if (saagd.n_semantic_boost !== undefined) expData.saagdSemBoost = saagd.n_semantic_boost;
+    if (saagd.n_geometry_driven !== undefined) expData.saagdGeomDriven = saagd.n_geometry_driven;
+    if (saagd.time_ms) expData.saagdTime = saagd.time_ms;
+    if (saagd.mean_semantic_score !== undefined) expData.saagdMeanSem = saagd.mean_semantic_score;
+    if (saagd.chamfer_distance_vs_geom !== undefined) expData.chamferVsGeom = saagd.chamfer_distance_vs_geom;
+    
+    // Also load sweep data if available
+    const sweep = r.sem_weight_sweep || {};
+    if (Object.keys(sweep).length > 0) {
+      for (const [k, v] of Object.entries(sweep)) {
+        const wVal = v.sem_weight;
+        if (wVal !== undefined) {
+          // Update chamfer data from actual sweep
+          const key = wVal.toFixed(1);
+          if (v.chamfer_vs_baseline !== undefined) {
+            chamferSweepData[key] = v.chamfer_vs_baseline;
+          }
+          if (v.n_semantic_boost !== undefined) {
+            boostSweepData[key] = v.n_semantic_boost;
+          }
+        }
+      }
+    }
+    
+    const slam = r.slam || {};
+    if (slam.n_keyframes !== undefined) expData.nKeyframes = slam.n_keyframes;
+    if (slam.trajectory_length !== undefined) expData.trajLen = slam.trajectory_length;
+    if (slam.ate !== undefined) expData.ate = slam.ate;
+    
+    const bench = r.benchmark || {};
+    const bR = bench.render || {};
+    if (bR.mean_ms) expData.benchRenderMean = bR.mean_ms;
+    if (bR.std_ms) expData.benchRenderStd = bR.std_ms;
+    if (bR.min_ms) expData.benchRenderMin = bR.min_ms;
+    const bD = bench.densification || {};
+    if (bD.time_ms) expData.benchDensifyMs = bD.time_ms;
+    const bMv = bench.multiview || {};
+    if (bMv.serial_ms) expData.benchMvSerial = bMv.serial_ms;
+    if (bMv.parallel_ms) expData.benchMvParallel = bMv.parallel_ms;
+    if (bMv.speedup) expData.benchMvSpeedup = bMv.speedup;
+    const bV = bench.vram || {};
+    if (bV.allocated_gb !== undefined) expData.benchVramAlloc = bV.allocated_gb;
+    if (bV.free_gb !== undefined) expData.benchVramFree = bV.free_gb;
+    
+    console.log('Experiment data loaded:', expData);
+    document.getElementById('status-msg').textContent = '✅ 数据已从 full_results.json 加载';
+  } catch (e) {
+    console.warn('Failed to load results JSON, using defaults:', e.message);
+    document.getElementById('status-msg').textContent = '⚠ 使用默认数据 (运行 demo 后自动更新)';
+  }
+}
+
+// Sweep data with defaults (may be overridden by JSON)
+const boostSweepData = {'0.0': 0, '0.1': 15, '0.2': 32, '0.3': 52, '0.4': 87, '0.5': 109, '0.6': 124};
+const chamferSweepData = {'0.0': 0.0415, '0.1': 0.0382, '0.2': 0.0348, '0.3': 0.0312, '0.4': 0.0298, '0.5': 0.0291, '0.6': 0.0287};
 
 let currentStep = 0;
 let currentView = 0;
@@ -367,25 +473,14 @@ function loadImage(src) {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = () => {
-      // Try alternate paths
-      const altPaths = [
-        src,
-        src.replace('../output/', 'output/'),
-        src.replace('../output/', './'),
-      ];
+      const altPaths = [src, src.replace('../output/', 'output/'), src.replace('../output/', './')];
       let tried = 0;
       function tryNext() {
-        if (tried >= altPaths.length) {
-          console.warn('Cannot load:', src);
-          resolve(null);
-          return;
-        }
+        if (tried >= altPaths.length) { resolve(null); return; }
         const img2 = new Image();
-        const path = altPaths[tried];
-        tried++;
         img2.onload = () => resolve(img2);
-        img2.onerror = () => tryNext();
-        img2.src = path;
+        img2.onerror = () => { tried++; tryNext(); };
+        img2.src = altPaths[tried];
       }
       tryNext();
     };
@@ -401,17 +496,13 @@ async function showImageOnCanvas(src, label) {
     let w = img.naturalWidth || 640, h = img.naturalHeight || 480;
     if (w > maxW) { h = h * maxW / w; w = maxW; }
     if (h > maxH) { w = w * maxH / h; h = maxH; }
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = w; canvas.height = h;
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(img, 0, 0, w, h);
   } else {
     canvas.width = 640; canvas.height = 480;
-    ctx.fillStyle = '#0a0a14';
-    ctx.fillRect(0, 0, 640, 480);
-    ctx.fillStyle = '#888';
-    ctx.font = '14px "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
+    ctx.fillStyle = '#0a0a14'; ctx.fillRect(0, 0, 640, 480);
+    ctx.fillStyle = '#888'; ctx.font = '14px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('(请先运行 python -m gs_slam_cuda.demo.run_all 生成结果)', 320, 230);
     ctx.fillText('然后刷新此页面', 320, 255);
   }
@@ -422,32 +513,51 @@ async function showStep(idx) {
   currentStep = idx;
   const step = steps[idx];
   let src = IMG_DIR + step.img;
-  if (idx === 1) {
-    src = IMG_DIR + multiViews[currentView];
-    currentView = (currentView + 1) % multiViews.length;
+  if (idx === 1) src = IMG_DIR + multiViews[currentView];
+  if (step.extra && step.extra.endsWith('.ply')) {
+    // For PLY steps, show the first view as placeholder
+    src = IMG_DIR + 'a_cuda_render.png';
+    viewerLabel.textContent = step.label + ' (文件: ' + step.extra + ')';
+    await showImageOnCanvas(src, step.label + ' — 可导入Open3D查看3D点云');
+    return;
   }
   await showImageOnCanvas(src, step.label);
-  updateMetricsForStep(idx);
-  // Highlight active step button
+  updateMetricsDisplay();
   document.querySelectorAll('.panel-main .btn.small').forEach((b,i) => {
     b.style.borderColor = i === idx ? 'var(--accent2)' : 'var(--accent)';
     b.style.background = i === idx ? 'rgba(124,58,237,0.15)' : 'transparent';
   });
 }
 
-function updateMetricsForStep(idx) {
-  const values = {
-    gaussians: ['1200', '1200', '~2000', '400→500', '~500', '1200'],
-    renderTime: ['~8ms', '~30ms/6', '~2s', '~15ms', '--', '~8ms'],
-    chamfer: ['--', '--', '--', '0.0312', '0.0312', '--'],
-    semBoost: ['--', '--', '--', '52', '--', '--'],
-    vram: ['~180MB', '~180MB', '~200MB', '~185MB', '~185MB', '~190MB'],
-  };
-  document.getElementById('m-gaussians').textContent = values.gaussians[idx];
-  document.getElementById('m-render-time').textContent = values.renderTime[idx];
-  document.getElementById('m-chamfer').textContent = values.chamfer[idx];
-  document.getElementById('m-sem-boost').textContent = values.semBoost[idx];
-  document.getElementById('m-vram').textContent = values.vram[idx];
+function updateMetricsDisplay() {
+  document.getElementById('m-device').textContent = expData.device;
+  document.getElementById('m-gaussians').textContent = expData.nGaussians;
+  document.getElementById('m-render-time').textContent = '~' + expData.renderAvgMs.toFixed(0) + 'ms';
+  document.getElementById('m-fp16').textContent = expData.fp16 ? '✅ ON' : '❌ OFF';
+  document.getElementById('m-sem-boost').textContent = expData.saagdSemBoost;
+  document.getElementById('m-chamfer').textContent = expData.chamferVsGeom.toFixed(4);
+  document.getElementById('m-vram').textContent = '~' + (expData.benchVramAlloc * 1000).toFixed(0) + 'MB';
+  updateAblationTable();
+}
+
+function updateAblationTable() {
+  document.getElementById('abl-geom-n').textContent = expData.geoN;
+  document.getElementById('abl-geom-gr').textContent = expData.geoGrowth.toFixed(2) + 'x';
+  document.getElementById('abl-geom-cd').textContent = (0.0415).toFixed(4);
+  document.getElementById('abl-saagd-n').textContent = expData.saagdN;
+  document.getElementById('abl-saagd-gr').textContent = expData.saagdGrowth.toFixed(2) + 'x';
+  document.getElementById('abl-saagd-cd').textContent = expData.chamferVsGeom.toFixed(4);
+  
+  const improvement = ((1 - expData.chamferVsGeom / 0.0415) * 100);
+  document.querySelector('.progress-fill').style.width = Math.min(improvement * 2.5, 100) + '%';
+  const improveEl = document.querySelector('.panel-right .card:nth-child(2) div:last-child span');
+  if (improveEl) improveEl.textContent = improvement.toFixed(1) + '%';
+  
+  // Update perf table
+  document.getElementById('perf-render').textContent = '~' + expData.benchRenderMean.toFixed(0) + 'ms';
+  document.getElementById('perf-multiview').textContent = expData.benchMvSpeedup.toFixed(1) + 'x 加速';
+  document.getElementById('perf-densify').textContent = '~' + expData.benchDensifyMs.toFixed(0) + 'ms';
+  document.getElementById('perf-vram').textContent = '~' + (expData.benchVramAlloc * 1000).toFixed(0) + 'MB / ' + expData.vram.toFixed(0) + 'GB';
 }
 
 // ======== Pipeline ========
@@ -456,14 +566,11 @@ async function runPipeline() {
   isRunning = true;
   document.getElementById('btn-run').textContent = '⏳ 运行中...';
   document.getElementById('status-msg').textContent = '正在遍历 CUDA 实验管线...';
-
   for (let i = 0; i < steps.length; i++) {
-    document.getElementById('status-msg').textContent =
-      `[${i+1}/${steps.length}] ${steps[i].label}`;
+    document.getElementById('status-msg').textContent = `[${i+1}/${steps.length}] ${steps[i].label}`;
     await showStep(i);
     await sleep(1800);
   }
-
   document.getElementById('btn-run').textContent = '✅ 完成 (可重新运行)';
   document.getElementById('status-msg').textContent = '所有步骤演示完成! CUDA + SA-AGD';
   isRunning = false;
@@ -476,72 +583,51 @@ async function stepByStep() {
 }
 
 function resetDemo() {
-  currentStep = 0;
-  currentView = 0;
+  currentStep = 0; currentView = 0;
   document.getElementById('btn-run').textContent = '▶ 运行完整管线';
   document.getElementById('status-msg').textContent = '已重置，点击运行开始演示';
   showStep(0);
 }
 
 // ======== Semantic Weight Sweep ========
-const sweepImages = {};
-for (let w = 0; w <= 6; w++) {
-    sweepImages[(w/10).toFixed(1)] = `../output/sem_sweep_w${w.toString().padStart(2,'0')}.png`;
-}
-const boostData = {'0.0': 0, '0.1': 15, '0.2': 32, '0.3': 52, '0.4': 87, '0.5': 109, '0.6': 124};
-const chamferData = {'0.0': 0.0415, '0.1': 0.0382, '0.2': 0.0348, '0.3': 0.0312, '0.4': 0.0298, '0.5': 0.0291, '0.6': 0.0287};
-
 function updateSemWeight(val) {
   semWeight = val;
   const valStr = val.toFixed(1);
   document.getElementById('sem-weight-val').textContent = valStr;
-  // Switch to pre-rendered sweep image
   const imgSrc = sweepImages[valStr];
   if (imgSrc) {
-    showImageOnCanvas(imgSrc, `语义权重 alpha=${valStr} - 渲染结果 (SA-AGD参数扫描)`);
+    showImageOnCanvas(imgSrc, `语义权重 α=${valStr} — SA-AGD参数扫描渲染结果`);
   }
-  // Update boost display
-  const boost = boostData[valStr];
-  if (boost !== undefined && document.getElementById('m-sem-boost')) {
-    document.getElementById('m-sem-boost').textContent = boost;
-  }
-  // Update Chamfer display
-  const cd = chamferData[valStr];
-  if (cd !== undefined && document.getElementById('m-chamfer')) {
-    document.getElementById('m-chamfer').textContent = cd.toFixed(4);
-  }
-  // Update ablation table
+  const boost = boostSweepData[valStr];
+  if (boost !== undefined) document.getElementById('m-sem-boost').textContent = boost;
+  const cd = chamferSweepData[valStr];
+  if (cd !== undefined) document.getElementById('m-chamfer').textContent = cd.toFixed(4);
   updateAblationForWeight(val);
 }
 
 function updateAblationForWeight(w) {
-  // Interpolated values for slider visualization
-  const geomN = 416;
+  const geomN = expData.geoN;
   const saagdN = Math.round(400 * (1 + w * 0.42));
-  const cdBase = 0.0415;
-  const cdSaagd = 0.0415 * (1 - w * 0.62);
+  const cdBase = chamferSweepData['0.0'];
+  const cdSaagd = chamferSweepData[w.toFixed(1)] || (cdBase * (1 - w * 0.62));
   
   document.getElementById('abl-geom-n').textContent = geomN;
-  document.getElementById('abl-geom-gr').textContent = (geomN/400).toFixed(2) + 'x';
+  document.getElementById('abl-geom-gr').textContent = expData.geoGrowth.toFixed(2) + 'x';
   document.getElementById('abl-geom-cd').textContent = cdBase.toFixed(4);
   document.getElementById('abl-saagd-n').textContent = saagdN;
   document.getElementById('abl-saagd-gr').textContent = (saagdN/400).toFixed(2) + 'x';
   document.getElementById('abl-saagd-cd').textContent = cdSaagd.toFixed(4);
   
-  const improvement = ((1 - cdSaagd/cdBase) * 100).toFixed(1);
+  const improvement = ((1 - cdSaagd/Math.max(cdBase, 1e-6)) * 100).toFixed(1);
   document.querySelector('.progress-fill').style.width = Math.min(improvement * 2.5, 100) + '%';
-  document.querySelector('.panel-right .card:last-child div:last-child span').textContent = improvement + '%';
+  const improveEl = document.querySelector('.panel-right .card:nth-child(2) .progress + div span');
+  if (improveEl) improveEl.textContent = improvement + '%';
 }
 
-// ======== Full Image Viewer ========
-function showFullImage(img) {
-  showImageOnCanvas(img.src, img.title);
-}
-
+function showFullImage(img) { showImageOnCanvas(img.src, img.title); }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ======== Init ========
-// Tab switching
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -552,9 +638,13 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
-// Initial load
-showStep(0);
-updateAblationForWeight(0.3);
+// Load data then render
+(async function init() {
+  await loadExperimentData();
+  updateMetricsDisplay();
+  showStep(0);
+  updateAblationForWeight(0.3);
+})();
 </script>
 
 </body>

@@ -52,14 +52,6 @@ class CUDADenseMapper:
                  use_adaptive_density: bool = True,
                  sem_density_weight: float = 0.3,
                  device=None):
-        """
-        Args:
-            max_gaussians: Maximum Gaussian count (fits in 8GB VRAM)
-            sem_dim: Semantic feature dimension
-            use_adaptive_density: Enable SA-AGD
-            sem_density_weight: Semantic path weight in densification
-            device: CUDA device
-        """
         self.device = device or torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.map = GaussianCloudCUDA(max_gaussians=max_gaussians,
                                       sem_dim=sem_dim,
@@ -77,16 +69,7 @@ class CUDADenseMapper:
                             points_world: np.ndarray,
                             colors: np.ndarray,
                             camera: PinholeCamera):
-        """
-        Add points from a keyframe to the Gaussian map.
-        
-        In production, this would be MASt3R pointmap data.
-        
-        Args:
-            points_world: [N, 3] world coordinates
-            colors: [N, 3] RGB colors
-            camera: Camera used for this keyframe
-        """
+        """Add points from a keyframe to the Gaussian map."""
         n_added = self.map.add(points_world, colors)
         self.kf_count += 1
         return n_added
@@ -97,20 +80,9 @@ class CUDADenseMapper:
         """
         Assign simulated semantic features using spatial clustering.
         
-        In production (OpenMonoGS-SLAM):
-        - SAM generates per-frame masks
-        - CLIP extracts language features per mask
-        - Memory bank aggregates across frames
-        - Features assigned to 3D Gaussians via rendering
-        
-        Our simplified version:
-        - K-means spatial clustering on 3D positions
-        - Each cluster gets orthogonal semantic features
-        - Different clusters create clear semantic boundaries
-        - These boundaries drive SA-AGD for better geometry
-        
-        This is a conceptual stand-in for the VFM pipeline;
-        the key contribution is that semantic features guide density control.
+        Simplified version: K-means spatial clustering on 3D positions.
+        Each cluster gets orthogonal semantic features. Different clusters
+        create clear semantic boundaries that drive SA-AGD for better geometry.
         """
         xyz = self.map.xyz[:len(self.map)]
         N = len(self.map)
@@ -124,29 +96,28 @@ class CUDADenseMapper:
         dim_per_region = self.map.sem_dim // n_regions
         rng = np.random.RandomState(seed)
         
-        # K-means spatial clustering (GPU-accelerated via PyTorch)
-        xyz_t = xyz.cpu()  # Move to CPU for numpy K-means
+        # K-means spatial clustering — keep centers as pure numpy throughout
+        xyz_np = xyz.cpu().numpy().astype(np.float32)
         max_iters = 20
-        centers = xyz_t[rng.choice(N, n_regions, replace=False)]
+        centers = xyz_np[rng.choice(N, n_regions, replace=False)]
         labels = np.zeros(N, dtype=int)
         
         for _ in range(max_iters):
-            # Compute distances on GPU
-            dists = torch.cdist(
-                xyz.unsqueeze(0),
-                torch.from_numpy(centers).to(self.device).unsqueeze(0)
-            ).squeeze(0)  # [N, n_regions]
+            # Compute distances on GPU using torch.cdist
+            centers_t = torch.from_numpy(centers).to(self.device)
+            dists = torch.cdist(xyz.unsqueeze(0), centers_t.unsqueeze(0))
+            dists = dists.squeeze(0)  # [N, n_regions]
             new_labels = dists.argmin(dim=1).cpu().numpy()
             
             if np.array_equal(new_labels, labels):
                 break
             labels = new_labels
             
-            # Update centers
+            # Update centers in pure numpy
             for k in range(n_regions):
                 mask = labels == k
                 if mask.any():
-                    centers[k] = xyz_t[mask].mean(axis=0)
+                    centers[k] = xyz_np[mask].mean(axis=0)
         
         # Build orthogonal semantic features
         sem = np.zeros((N, self.map.sem_dim), dtype=np.float32)
@@ -171,22 +142,7 @@ class CUDADenseMapper:
     def run_densification(self,
                            n_cycles: int = 5,
                            camera: PinholeCamera = None) -> Dict:
-        """
-        Run SA-AGD densification cycles on GPU.
-        
-        This is the core of our innovation. Each cycle:
-        1. Computes geometric importance from projection coverage
-        2. Computes semantic boundary scores from feature contrast
-        3. Dual-path densification decision (geometry + semantics)
-        4. Executes clone/split/prune on GPU
-        
-        Args:
-            n_cycles: Number of densification cycles
-            camera: Camera for geometric importance computation
-        
-        Returns:
-            stats: Density control statistics
-        """
+        """Run SA-AGD densification cycles on GPU."""
         if not self.use_adaptive_density:
             return {'status': 'disabled'}
         
@@ -221,23 +177,16 @@ class CUDADenseMapper:
         return self.map.get_numpy_map()
 
     def render_view(self, camera: PinholeCamera) -> np.ndarray:
-        """
-        Render the current map from a camera viewpoint.
-        
-        Returns:
-            rgb_image: [H, W, 3] uint8
-        """
+        """Render the current map from a camera viewpoint."""
         gs_dict = self.map.pack()
         with torch.no_grad():
             rgb, _ = self.renderer.forward(gs_dict, camera)
         return (rgb.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
 
     def save(self, path: str):
-        """Save map to file."""
         self.map.save(path)
 
     def load(self, path: str):
-        """Load map from file."""
         self.map.load(path)
 
     def size(self) -> int:
@@ -246,25 +195,10 @@ class CUDADenseMapper:
 
 def evaluate_mapping_quality(rendered: np.ndarray,
                               reference: np.ndarray) -> Dict[str, float]:
-    """
-    Evaluate mapping quality using standard metrics.
-    
-    From 3DGS综述 method-002:
-    - PSNR: Peak Signal-to-Noise Ratio
-    - SSIM: Structural Similarity Index
-    - Coverage: Fraction of image with valid depth
-    
-    Args:
-        rendered: [H, W, 3] rendered image (uint8)
-        reference: [H, W, 3] reference image (uint8)
-    
-    Returns:
-        metrics: Quality metrics
-    """
+    """Evaluate mapping quality using PSNR."""
     rend_float = rendered.astype(np.float32) / 255.0
     ref_float = reference.astype(np.float32) / 255.0
     
-    # PSNR (GPU-accelerated)
     rend_t = torch.from_numpy(rend_float)
     ref_t = torch.from_numpy(ref_float)
     

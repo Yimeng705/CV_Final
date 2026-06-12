@@ -49,31 +49,28 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from core.cuda_wrapper import CudaContext, get_cuda_device_info
-from core.camera import PinholeCamera, CameraPose, look_at, generate_helical_trajectory
-from core.gaussian_model_cuda import GaussianCloudCUDA, create_test_scene_cuda
-from core.renderer_cuda import (
+from gs_slam_cuda.core.cuda_wrapper import CudaContext, get_cuda_device_info
+from gs_slam_cuda.core.camera import PinholeCamera, CameraPose, look_at, generate_helical_trajectory
+from gs_slam_cuda.core.gaussian_model_cuda import GaussianCloudCUDA, create_test_scene_cuda
+from gs_slam_cuda.core.renderer_cuda import (
     CUDASplatRenderer,
     compute_psnr_cuda,
     compute_ssim_cuda,
     compute_lpips_proxy
 )
-from core.adaptive_density_cuda import CUDADensityController, run_cuda_densification_cycle
-from core.factor_graph_cuda import (
+from gs_slam_cuda.core.adaptive_density_cuda import CUDADensityController, run_cuda_densification_cycle
+from gs_slam_cuda.core.factor_graph_cuda import (
     CUDAFactorGraph,
     compute_ate,
     compute_rpe,
     apply_depth_uncertainty_mask,
     filter_loop_closure_candidates
 )
-from slam.frontend_cuda import CUDAFrontend
-from slam.backend_cuda import CUDABackend
-from slam.mapper_cuda import CUDADenseMapper, evaluate_mapping_quality
-from training.trainer import GaussianTrainer, TrainingConfig, create_training_scene
-from data.dataset_loader import create_dataloader, DATASET_CONFIGS
+from gs_slam_cuda.slam.frontend_cuda import CUDAFrontend
+from gs_slam_cuda.slam.backend_cuda import CUDABackend
+from gs_slam_cuda.slam.mapper_cuda import CUDADenseMapper, evaluate_mapping_quality
+from gs_slam_cuda.training.trainer import GaussianTrainer, TrainingConfig, create_training_scene
+from gs_slam_cuda.data.dataset_loader import create_dataloader, DATASET_CONFIGS
 
 # Try Pillow for image saving
 try:
@@ -145,7 +142,7 @@ def step2_data_loading(args, device) -> Tuple:
     print(f"  Generated {len(gc)} Gaussians on {gc.device}")
     
     print("  Generating helical camera trajectory (50 poses)...")
-    poses = generate_helical_trajectory(n_poses=50, radius=8.0, height_range=(-2.0, 4.0))
+    poses = generate_helical_trajectory(n_poses=50, radius=10.0, height_range=(-2.0, 4.0))
     print(f"  Generated {len(poses)} camera poses")
     
     return gc, poses, None
@@ -190,8 +187,8 @@ def step3_cuda_rendering(renderer, gc, poses, output_dir, args) -> Dict:
     
     # Reference rendering
     if len(poses) > 0:
-        R_ref, t_ref = look_at(np.array([3., 4., 6.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
-        ref_cam = PinholeCamera()
+        R_ref, t_ref = look_at(np.array([8., 5., 10.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
+        ref_cam = PinholeCamera(fx=500, fy=500, cx=320, cy=240)
         ref_cam.set_pose(R_ref, t_ref)
         rgb_ref, _ = renderer.forward(gs_dict, ref_cam)
         
@@ -365,9 +362,9 @@ def step5b_sem_weight_sweep(output_dir, device) -> Dict:
     """
     print_header("Step 5b: Semantic Weight Parameter Sweep (α=0.0~0.6)")
     
-    from core.adaptive_density_cuda import CUDADensityController, run_cuda_densification_cycle
-    from slam.mapper_cuda import CUDADenseMapper
-    from core.camera import PinholeCamera, look_at
+    from gs_slam_cuda.core.adaptive_density_cuda import CUDADensityController, run_cuda_densification_cycle
+    from gs_slam_cuda.slam.mapper_cuda import CUDADenseMapper
+    from gs_slam_cuda.core.camera import PinholeCamera, look_at
     
     cam = PinholeCamera()
     R, t = look_at(np.array([3., 2., 4.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))

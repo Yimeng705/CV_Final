@@ -1,0 +1,26 @@
+{
+  "render": {
+    "mean_ms": 615.6,
+    "std_ms": 4.3,
+    "min_ms": 609.6,
+    "max_ms": 625.5,
+    "n_gaussians": 1600,
+    "fp16": true
+  },
+  "densification": {
+    "time_ms": 94.7,
+    "n_before": 1642
+  },
+  "multiview": {
+    "serial_ms": 3592.2,
+    "parallel_ms": 40158.4,
+    "speedup": 0.1,
+    "n_views": 6
+  },
+  "vram": {
+    "allocated_gb": 0.056,
+    "reserved_gb": 8.957,
+    "free_gb": -0.957,
+    "total_gb": 8.0
+  }
+}

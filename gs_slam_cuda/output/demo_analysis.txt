@@ -1,0 +1,11 @@
+
+======================================================================
+  Step 1: CUDA Environment Check
+======================================================================
+  CUDA Available:   True
+  Device:           NVIDIA GeForce RTX 4060 Laptop GPU
+  VRAM:             8.0 GB total, 8.0 GB free
+  Compute Cap:      8.9
+  CUDA Version:     12.8
+  PyTorch Version:  2.7.0+cu128
+  PyTorch CUDA:     12.8

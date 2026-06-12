@@ -1,0 +1,31 @@
+{
+  "run_time_sec": 0,
+  "device": "unknown",
+  "cuda_available": false,
+  "rendering": {
+    "avg_ms": "N/A",
+    "n_gaussians": "N/A",
+    "fp16": "N/A"
+  },
+  "sa_agd": {},
+  "slam": {
+    "n_keyframes": "N/A",
+    "trajectory_length_m": "N/A"
+  },
+  "benchmark": {
+    "render_mean_ms": "N/A",
+    "multiview_speedup": "N/A"
+  },
+  "output_files": [
+    "a_cuda_render.png",
+    "demo_analysis.txt",
+    "d_view_000.png",
+    "d_view_001.png",
+    "d_view_002.png",
+    "d_view_003.png",
+    "d_view_004.png",
+    "d_view_005.png",
+    "geometry_only.ply",
+    "sa_agd_semantic.ply"
+  ]
+}

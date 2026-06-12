@@ -465,47 +465,66 @@ def run_cuda_densification_cycle(
             geom_imp, sem_score, gc.scales
         )
         
-        # 4. Execute clone
+        # 4. Execute clone (write into preallocated buffer)
         if clone_mask.any():
-            gc.xyz[:N], gc.rgb[:N], gc.opacity_raw[:N], \
-            gc.scale_raw[:N], gc.sem[:N], gc.rot[:N] = \
+            new_xyz, new_rgb, new_op, new_sc, new_sem, new_rot = \
                 controller.execute_clone(
                     gc.xyz[:N], gc.rgb[:N], gc.opacity_raw[:N],
                     gc.scale_raw[:N], gc.sem[:N], gc.rot[:N],
                     clone_mask
                 )
-            gc._N = gc.xyz.shape[0]
+            new_N = min(new_xyz.shape[0], gc._cap)
+            gc.xyz[:new_N] = new_xyz[:new_N]
+            gc.rgb[:new_N] = new_rgb[:new_N]
+            gc.opacity_raw[:new_N] = new_op[:new_N]
+            gc.scale_raw[:new_N] = new_sc[:new_N]
+            gc.sem[:new_N] = new_sem[:new_N]
+            gc.rot[:new_N] = new_rot[:new_N]
+            gc._N = new_N
             gc._cov_valid = False
             N = gc._N
         
-        # 5. Execute split
+        # 5. Execute split (write into preallocated buffer)
         if split_mask.any():
-            gc.xyz[:N], gc.rgb[:N], gc.opacity_raw[:N], \
-            gc.scale_raw[:N], gc.sem[:N], gc.rot[:N] = \
+            new_xyz, new_rgb, new_op, new_sc, new_sem, new_rot = \
                 controller.execute_split(
                     gc.xyz[:N], gc.rgb[:N], gc.opacity_raw[:N],
                     gc.scale_raw[:N], gc.sem[:N], gc.rot[:N],
                     split_mask
                 )
-            gc._N = gc.xyz.shape[0] if gc.xyz.shape[0] <= gc._cap else gc._cap
+            new_N = min(new_xyz.shape[0], gc._cap)
+            gc.xyz[:new_N] = new_xyz[:new_N]
+            gc.rgb[:new_N] = new_rgb[:new_N]
+            gc.opacity_raw[:new_N] = new_op[:new_N]
+            gc.scale_raw[:new_N] = new_sc[:new_N]
+            gc.sem[:new_N] = new_sem[:new_N]
+            gc.rot[:new_N] = new_rot[:new_N]
+            gc._N = new_N
             gc._cov_valid = False
             N = gc._N
         
-        # 6. Execute prune
+        # 6. Execute prune (write into preallocated buffer)
         if N > 0:
             prune_mask = controller.should_prune(
                 gc.opacities, gc.xyz[:N], gc.scales
             )
             if prune_mask.any():
-                gc.xyz[:N], gc.rgb[:N], gc.opacity_raw[:N], \
-                gc.scale_raw[:N], gc.sem[:N], gc.rot[:N] = \
+                new_xyz, new_rgb, new_op, new_sc, new_sem, new_rot = \
                     controller.execute_prune(
                         gc.xyz[:N], gc.rgb[:N], gc.opacity_raw[:N],
                         gc.scale_raw[:N], gc.sem[:N], gc.rot[:N],
                         prune_mask
                     )
-                gc._N = gc.xyz.shape[0]
+                new_N = new_xyz.shape[0]
+                gc.xyz[:new_N] = new_xyz[:new_N]
+                gc.rgb[:new_N] = new_rgb[:new_N]
+                gc.opacity_raw[:new_N] = new_op[:new_N]
+                gc.scale_raw[:new_N] = new_sc[:new_N]
+                gc.sem[:new_N] = new_sem[:new_N]
+                gc.rot[:new_N] = new_rot[:new_N]
+                gc._N = new_N
                 gc._cov_valid = False
+                N = gc._N
     
     controller.stats.n_final = len(gc)
     controller.stats.mean_semantic_score = float(sem_score.mean().item()) if len(gc) > 0 else 0.0

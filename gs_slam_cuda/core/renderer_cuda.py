@@ -70,7 +70,11 @@ class CUDASplatRenderer(nn.Module):
                        t: torch.Tensor,
                        fx: float, fy: float,
                        cx: float, cy: float) -> Tuple[torch.Tensor, ...]:
-        """Project 3D world points to 2D image coordinates."""
+        """Project 3D world points to 2D image coordinates.
+        
+        Note: look_at() returns R,t that transform world→camera (w2c).
+        So pts_cam = R @ xyz_world + t is the correct projection.
+        """
         R_t = torch.as_tensor(R, device=self.device, dtype=torch.float32)
         t_t = torch.as_tensor(t, device=self.device, dtype=torch.float32).reshape(3, 1)
         pts_cam = (R_t @ xyz_world.T + t_t).T  # [N, 3]
@@ -184,12 +188,12 @@ class CUDASplatRenderer(nn.Module):
             return (torch.ones(self.H, self.W, 3, device=self.device),
                     torch.full((self.H, self.W), float('inf'), device=self.device))
 
-        # Enable FP16 for computation if configured
-        with torch.cuda.amp.autocast(enabled=self.use_fp16):
-            if differentiable:
+        if differentiable:
+            with torch.amp.autocast('cuda', enabled=self.use_fp16):
                 return self._render_splatted(xyz, rgb, opacity, cov, camera)
-            else:
-                return self._render_tile_based(xyz, rgb, opacity, cov, camera)
+        else:
+            with torch.no_grad():
+                return self._render_splatted(xyz, rgb, opacity, cov, camera)
 
     def _render_splatted(self,
                          xyz: torch.Tensor,

@@ -30,7 +30,7 @@ class PinholeCamera:
     Pinhole camera model with SE(3) pose.
     
     Coordinate convention:
-    - World: right-handed, Y-up (KITTI) or Z-up (common CV)
+    - World: right-handed, Y-up
     - Camera: right-handed, Z-forward, X-right, Y-down
     - Projection: u = fx * X/Z + cx, v = fy * Y/Z + cy
     
@@ -42,10 +42,10 @@ class PinholeCamera:
     """
 
     def __init__(self,
-                 fx: float = 525.0,
-                 fy: float = 525.0,
-                 cx: float = 319.5,
-                 cy: float = 239.5,
+                 fx: float = 500.0,
+                 fy: float = 500.0,
+                 cx: float = 320.0,
+                 cy: float = 240.0,
                  width: int = 640,
                  height: int = 480):
         self.fx = fx
@@ -219,8 +219,8 @@ def look_at(camera_pos: np.ndarray,
     camera_pos = np.array(camera_pos, dtype=np.float32).flatten()
     target = np.array(target, dtype=np.float32).flatten()
     
-    # Camera Z-axis (forward direction = from camera to target)
-    z = camera_pos - target
+    # Camera Z-axis (forward direction = from camera toward target)
+    z = target - camera_pos
     z = z / (np.linalg.norm(z) + 1e-10)
     
     # Camera X-axis (right)

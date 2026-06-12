@@ -1,0 +1,168 @@
+{
+  "timestamp": "2026-06-12 18:48:22",
+  "system": "gs_slam_cuda",
+  "version": "3.0.0-optimized",
+  "device_target": "RTX 3060 8GB Linux",
+  "args": {
+    "cuda": false,
+    "fp16": true,
+    "dataset": "synthetic",
+    "data_path": null,
+    "max_frames": 500,
+    "n_views": 6,
+    "train": false,
+    "train_iters": 200,
+    "benchmark": false,
+    "all": false,
+    "output": "output"
+  },
+  "environment": {
+    "cuda_available": true,
+    "device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "vram_total_gb": 8.0,
+    "vram_free_gb": 8.0,
+    "compute_capability": "8.9",
+    "cuda_version": "12.8",
+    "torch_version": "2.7.0+cu128",
+    "pytorch_cuda_version": "12.8",
+    "cudnn_version": 90701
+  },
+  "rendering": {
+    "avg_render_time_ms": 629.9,
+    "std_render_time_ms": 36.9,
+    "n_gaussians": 1600,
+    "n_views": 6,
+    "fp16": true
+  },
+  "sa_agd": {
+    "strategies": {
+      "no_control": {
+        "n_gaussians": 532,
+        "description": "Baseline - no density adjustment"
+      },
+      "geometry_only": {
+        "n_gaussians": 539,
+        "n_cloned": 7,
+        "n_split": 0,
+        "n_pruned": 0,
+        "n_semantic_boost": 0,
+        "n_geometry_driven": 4,
+        "time_ms": 29.5,
+        "growth_ratio": 1.01,
+        "description": "3DGS standard - geometry-driven only"
+      },
+      "sa_agd": {
+        "n_gaussians": 571,
+        "n_cloned": 39,
+        "n_split": 0,
+        "n_pruned": 0,
+        "n_semantic_boost": 8,
+        "n_geometry_driven": 8,
+        "time_ms": 28.5,
+        "growth_ratio": 1.07,
+        "mean_semantic_score": 0.1,
+        "chamfer_distance_vs_geom": 0.381,
+        "description": "OUR METHOD - dual-path geometry + semantics"
+      }
+    }
+  },
+  "sem_weight_sweep": {
+    "w00": {
+      "sem_weight": 0.0,
+      "n_gaussians": 539,
+      "n_cloned": 7,
+      "n_split": 0,
+      "n_semantic_boost": 0,
+      "chamfer_vs_baseline": 0.0,
+      "growth_ratio": 1.347
+    },
+    "w01": {
+      "sem_weight": 0.1,
+      "n_gaussians": 552,
+      "n_cloned": 20,
+      "n_split": 0,
+      "n_semantic_boost": 2,
+      "chamfer_vs_baseline": 0.348609,
+      "growth_ratio": 1.38
+    },
+    "w02": {
+      "sem_weight": 0.2,
+      "n_gaussians": 546,
+      "n_cloned": 14,
+      "n_split": 0,
+      "n_semantic_boost": 3,
+      "chamfer_vs_baseline": 0.322048,
+      "growth_ratio": 1.365
+    },
+    "w03": {
+      "sem_weight": 0.3,
+      "n_gaussians": 567,
+      "n_cloned": 35,
+      "n_split": 0,
+      "n_semantic_boost": 7,
+      "chamfer_vs_baseline": 0.347835,
+      "growth_ratio": 1.417
+    },
+    "w04": {
+      "sem_weight": 0.4,
+      "n_gaussians": 574,
+      "n_cloned": 42,
+      "n_split": 0,
+      "n_semantic_boost": 14,
+      "chamfer_vs_baseline": 0.344708,
+      "growth_ratio": 1.435
+    },
+    "w05": {
+      "sem_weight": 0.5,
+      "n_gaussians": 586,
+      "n_cloned": 54,
+      "n_split": 0,
+      "n_semantic_boost": 17,
+      "chamfer_vs_baseline": 0.374662,
+      "growth_ratio": 1.465
+    },
+    "w06": {
+      "sem_weight": 0.6,
+      "n_gaussians": 617,
+      "n_cloned": 85,
+      "n_split": 0,
+      "n_semantic_boost": 40,
+      "chamfer_vs_baseline": 0.344888,
+      "growth_ratio": 1.542
+    }
+  },
+  "slam": {
+    "ate_rmse": 0.0,
+    "rpe_trans": 0.0,
+    "rpe_rot": 0.0,
+    "n_loop_closures": 0,
+    "n_keyframes": 5,
+    "trajectory_length": 82.95013520122691
+  },
+  "benchmark": {
+    "render": {
+      "mean_ms": 599.0,
+      "std_ms": 1.1,
+      "min_ms": 597.9,
+      "max_ms": 601.9,
+      "n_gaussians": 1600,
+      "fp16": true
+    },
+    "densification": {
+      "time_ms": 8.5,
+      "n_before": 1635
+    },
+    "multiview": {
+      "serial_ms": 3542.7,
+      "parallel_ms": 19245.8,
+      "speedup": 0.2,
+      "n_views": 6
+    },
+    "vram": {
+      "allocated_gb": 0.056,
+      "reserved_gb": 8.957,
+      "free_gb": -0.957,
+      "total_gb": 8.0
+    }
+  }
+}

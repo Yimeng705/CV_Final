@@ -339,6 +339,8 @@ def compute_rpe(est_poses: List[CameraPose],
                 gt_poses: List[CameraPose],
                 delta: int = 1) -> Tuple[float, float]:
     """Compute Relative Pose Error (RPE)."""
+    if len(gt_poses) < 2 or len(est_poses) < 2:
+        return 0.0, 0.0
     n = len(est_poses)
     trans_errors, rot_errors = [], []
     for i in range(n - delta):

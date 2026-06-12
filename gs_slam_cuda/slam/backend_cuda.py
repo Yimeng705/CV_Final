@@ -156,8 +156,12 @@ class CUDABackend:
                 'n_loop_closures': Number of verified loop closures
             }
         """
-        ate = compute_ate(self.optimized_poses, gt_poses)
-        rpe_t, rpe_r = compute_rpe(self.optimized_poses, gt_poses)
+        if len(gt_poses) >= 2:
+            ate = compute_ate(self.optimized_poses, gt_poses)
+            rpe_t, rpe_r = compute_rpe(self.optimized_poses, gt_poses)
+        else:
+            ate = 0.0
+            rpe_t, rpe_r = 0.0, 0.0
         
         return {
             'ate_rmse': ate,

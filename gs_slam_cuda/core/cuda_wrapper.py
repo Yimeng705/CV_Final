@@ -107,7 +107,7 @@ class CudaContext:
         self.max_vram_usage_gb = max_vram_usage_gb
         
         # Initialize scaler for mixed precision
-        self.scaler = GradScaler(enabled=use_mixed_precision) if use_mixed_precision else None
+        self.scaler = torch.amp.GradScaler('cuda', enabled=use_mixed_precision) if use_mixed_precision else None
         
         # Query device info
         self._query_device()
@@ -120,7 +120,9 @@ class CudaContext:
     def _query_device(self):
         """Query CUDA device properties."""
         props = torch.cuda.get_device_properties(self.device_id)
-        vram_total = props.total_mem / (1024**3)
+        # PyTorch 2.x uses total_memory; older versions use total_mem
+        total_mem = getattr(props, 'total_memory', None) or getattr(props, 'total_mem', 0)
+        vram_total = total_mem / (1024**3)
         vram_free = vram_total - (torch.cuda.memory_allocated() / (1024**3))
         
         CudaContext._device_info = CudaDeviceInfo(

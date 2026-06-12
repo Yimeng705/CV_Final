@@ -204,7 +204,7 @@ class GaussianTrainer:
         )
         
         # GradScaler for FP16 training
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.config.use_fp16)
+        self.scaler = torch.amp.GradScaler('cuda', enabled=self.config.use_fp16)
     
     def compute_loss(self,
                      pred: torch.Tensor,
