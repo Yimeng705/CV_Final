@@ -5,7 +5,7 @@
     "growth_ratio": 1.0,
     "n_semantic_boost": 0,
     "coverage_ratio": 0.4582291666666667,
-    "render_time_ms": 1508.6183547973633
+    "render_time_ms": 1280.9827327728271
   },
   {
     "name": "\u7eaf\u51e0\u4f55\u5bc6\u5ea6\u63a7\u5236(3DGS)",
@@ -13,7 +13,7 @@
     "growth_ratio": 1.0366666666666666,
     "n_semantic_boost": 0,
     "coverage_ratio": 0.4582291666666667,
-    "render_time_ms": 1411.1075401306152
+    "render_time_ms": 1257.1563720703125
   },
   {
     "name": "\u8bed\u4e49\u611f\u77e5\u5bc6\u5ea6\u63a7\u5236(Ours)",
@@ -21,6 +21,6 @@
     "growth_ratio": 1.2483333333333333,
     "n_semantic_boost": 258,
     "coverage_ratio": 0.4582291666666667,
-    "render_time_ms": 1593.7731266021729
+    "render_time_ms": 1618.3266639709473
   }
 ]

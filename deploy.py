@@ -1,78 +1,196 @@
+#!/usr/bin/env python3
 """
-MASt3R-Fusion + GS-SLAM 部署入口
-=================================
-基于真实代码仓库的部署脚本。
+gs_slam_cuda Deployment Script
+================================
+Complete deployment entry point for the optimized gs_slam_cuda pipeline.
 
-前置条件 (按顺序执行):
-1. conda create -n mast3r_fusion python=3.11.9 && conda activate mast3r_fusion
+Target: Linux + RTX 3060 8GB
+
+Prerequisites:
+1. conda create -n gs_slam python=3.11.9 && conda activate gs_slam
 2. pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
-3. cd gtsam && mkdir build && cd build
-   cmake .. -DGTSAM_BUILD_PYTHON=1 -DGTSAM_PYTHON_VERSION=3.11.9
-   make python-install -j12
-4. cd MASt3R-Fusion && pip install -e thirdparty/mast3r && pip install -e thirdparty/in3d && pip install --no-build-isolation -e .
-5. 下载MASt3R模型权重到 MASt3R-Fusion/checkpoints/
+3. pip install numpy pillow tqdm
 
-如果上述前置条件不满足，将使用gs_slam的纯NumPy实现作为fallback。
+Usage:
+  python deploy.py                   # Full pipeline (CUDA)
+  python deploy.py --cpu             # CPU fallback
+  python deploy.py --demo            # Demo mode (quick synthetic)
+  python deploy.py --train           # Include training
+  python deploy.py --benchmark        # Performance benchmark
+  python deploy.py --dataset tum_fr1_desk --data-path /path/to/TUM
 """
 
 import sys
 import os
+import argparse
 import warnings
 
-# 获取项目根目录
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
-def try_import_mast3r_fusion():
-    """尝试使用真实的MASt3R-Fusion"""
-    try:
-        sys.path.insert(0, os.path.join(ROOT, 'MASt3R-Fusion'))
-        import mast3r_fusion
-        print("[INFO] MASt3R-Fusion 导入成功! 使用完整CUDA管线。")
-        return True
-    except ImportError as e:
-        print(f"[WARN] MASt3R-Fusion 导入失败: {e}")
-        print("[INFO] 使用 gs_slam 纯NumPy fallback实现")
-        return False
 
-def try_import_mast3r():
-    """检查MASt3R模型是否可用"""
+def check_dependencies():
+    """Check and report available dependencies."""
+    deps = {}
+    
+    # Check PyTorch
+    try:
+        import torch
+        deps['torch'] = torch.__version__
+        deps['cuda'] = torch.cuda.is_available()
+        if deps['cuda']:
+            deps['cuda_version'] = torch.version.cuda
+            deps['device'] = torch.cuda.get_device_name(0)
+    except ImportError:
+        deps['torch'] = None
+        deps['cuda'] = False
+    
+    # Check PIL
+    try:
+        from PIL import Image
+        deps['pil'] = True
+    except ImportError:
+        deps['pil'] = False
+    
+    # Check MASt3R
     try:
         import mast3r
-        from mast3r.model import AsymmetricMASt3R
-        print("[INFO] MASt3R 模型可用")
-        return True
+        deps['mast3r'] = True
     except ImportError:
-        print("[WARN] MASt3R 未安装，将使用模拟pointmap")
-        return False
-
-def run_full_pipeline():
-    """根据可用依赖选择运行方式"""
-    have_mast3r_fusion = try_import_mast3r_fusion()
-    have_mast3r = try_import_mast3r()
+        deps['mast3r'] = False
     
-    if have_mast3r_fusion and have_mast3r:
-        print("\n" + "="*60)
-        print("  运行完整MASt3R-Fusion管线 (CUDA)")
-        print("="*60)
-        run_mast3r_fusion()
-    else:
-        print("\n" + "="*60)
-        print("  运行 gs_slam 实现 (纯NumPy)")
-        print("="*60)
-        run_gs_slam()
+    # Check GTSAM
+    try:
+        import gtsam
+        deps['gtsam'] = True
+    except ImportError:
+        deps['gtsam'] = False
+    
+    return deps
 
-def run_mast3r_fusion():
-    """使用真实MASt3R-Fusion管线"""
-    print("[INFO] MASt3R-Fusion 管线待实现")
-    print("[INFO] 请参考 MASt3R-Fusion/README.md 中的使用说明")
-    print("[INFO] 关键命令:")
-    print("  python MASt3R-Fusion/main.py --dataset <path> --config <config> ...")
 
-def run_gs_slam():
-    """使用gs_slam实现"""
+def print_banner():
+    """Print deployment banner."""
+    print("""
+╔══════════════════════════════════════════════════════════════╗
+║                  gs_slam_cuda  v3.0.0                        ║
+║          SA-AGD SLAM with CUDA Optimization                  ║
+║       Target: Linux + RTX 3060 8GB                           ║
+║       Framework: PyTorch 2.x + CUDA 12.x                     ║
+╚══════════════════════════════════════════════════════════════╝
+    """)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='gs_slam_cuda: SA-AGD 3DGS SLAM Deployment'
+    )
+    parser.add_argument('--cpu', action='store_true',
+                        help='Force CPU mode')
+    parser.add_argument('--cuda', action='store_true',
+                        help='Force CUDA mode')
+    parser.add_argument('--fp16', action='store_true', default=True,
+                        help='Enable FP16 mixed precision')
+    parser.add_argument('--no-fp16', action='store_false', dest='fp16',
+                        help='Disable FP16')
+    parser.add_argument('--demo', action='store_true',
+                        help='Quick demo mode (synthetic only)')
+    parser.add_argument('--train', action='store_true',
+                        help='Include training pipeline')
+    parser.add_argument('--train-iters', type=int, default=200,
+                        help='Training iterations')
+    parser.add_argument('--benchmark', action='store_true',
+                        help='Performance benchmark only')
+    parser.add_argument('--dataset', type=str, default='synthetic',
+                        choices=['synthetic', 'tum_fr1_desk', 'tum_fr2_xyz',
+                                 'tum_fr3_long_office', 'euroc_mh01',
+                                 'euroc_v101', 'replica_room0'],
+                        help='Dataset to use')
+    parser.add_argument('--data-path', type=str, default=None,
+                        help='Path to dataset root directory')
+    parser.add_argument('--max-frames', type=int, default=500,
+                        help='Maximum frames to load')
+    parser.add_argument('--output', type=str, default='output',
+                        help='Output directory')
+    args = parser.parse_args()
+    
+    print_banner()
+    
+    # Check dependencies
+    deps = check_dependencies()
+    print(f"  PyTorch:  {deps.get('torch', 'NOT FOUND')}")
+    print(f"  CUDA:     {deps.get('cuda', False)}")
+    if deps.get('cuda'):
+        print(f"  Device:   {deps.get('device', 'unknown')}")
+        print(f"  CUDA:     {deps.get('cuda_version', 'unknown')}")
+    print(f"  PIL:      {deps.get('pil', False)}")
+    print(f"  MASt3R:   {deps.get('mast3r', False)}")
+    print(f"  GTSAM:    {deps.get('gtsam', False)}")
+    
+    if not deps.get('torch'):
+        print("\n[ERROR] PyTorch is required!")
+        print("  Install: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124")
+        sys.exit(1)
+    
+    # Import and run gs_slam_cuda demo
     sys.path.insert(0, ROOT)
-    from gs_slam.demo.run_all import main
-    main()
+    sys.path.insert(0, os.path.join(ROOT, 'gs_slam_cuda'))
+    
+    # Override sys.argv for the demo script
+    demo_args = ['run_all.py']
+    
+    if args.cpu:
+        demo_args.append('--cuda')  # will fallback to CPU
+    elif args.cuda:
+        demo_args.append('--cuda')
+    
+    if args.fp16:
+        demo_args.append('--fp16')
+    else:
+        demo_args.append('--no-fp16')
+    
+    if args.benchmark:
+        demo_args.append('--benchmark')
+    else:
+        demo_args.append('--dataset')
+        demo_args.append(args.dataset)
+    
+    if args.data_path:
+        demo_args.append('--data-path')
+        demo_args.append(args.data_path)
+    
+    if args.max_frames:
+        demo_args.append('--max-frames')
+        demo_args.append(str(args.max_frames))
+    
+    if args.train:
+        demo_args.append('--train')
+        demo_args.append('--train-iters')
+        demo_args.append(str(args.train_iters))
+    
+    if args.output:
+        demo_args.append('--output')
+        demo_args.append(args.output)
+    
+    if args.demo:
+        demo_args.append('--all')
+    
+    # Save original argv and set new ones
+    orig_argv = sys.argv
+    sys.argv = demo_args
+    
+    try:
+        from gs_slam_cuda.demo.run_all import main as demo_main
+        demo_main()
+    except Exception as e:
+        print(f"\n[ERROR] Pipeline failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        sys.argv = orig_argv
+    
+    print("\n[INFO] Deployment completed successfully!")
+
 
 if __name__ == '__main__':
-    run_full_pipeline()
+    main()

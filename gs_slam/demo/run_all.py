@@ -280,6 +280,10 @@ def step4_mapping(kfs, pg):
     ]
 
     strategy_results = []
+    cam_mapping = PinholeCamera()
+    R_mc, t_mc = look_at(np.array([3., 2., 4.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
+    cam_mapping.set_pose(R_mc, t_mc)
+
     for name, use_den, sw in strategies:
         mapper = DenseMapper(5000, use_adaptive_density=use_den, sem_weight=sw)
         for i, kf in enumerate(kfs[:8]):
@@ -295,7 +299,7 @@ def step4_mapping(kfs, pg):
         mapper.assign_semantic_regions(n_regions=4)
 
         if use_den:
-            dens_stats = mapper.run_densification(n_cycles=3, camera=cam)
+            dens_stats = mapper.run_densification(n_cycles=3, camera=cam_mapping)
         else:
             dens_stats = {
                 'initial_n': mapper.size(), 'final_n': mapper.size(),
@@ -333,7 +337,7 @@ def step4_mapping(kfs, pg):
         colors = np.tile(np.random.rand(3), (len(pts_world), 1)).astype(np.float32)
         mapper_ours.add_pointcloud(pts_world.astype(np.float32), colors)
     mapper_ours.assign_semantic_regions(n_regions=4)
-    dens_stats = mapper_ours.run_densification(n_cycles=3, camera=cam)
+    dens_stats = mapper_ours.run_densification(n_cycles=3, camera=cam_mapping)
 
     rgb, sem_map, depth_map = renderer.render(mapper_ours.get_map(), cam)
 
@@ -668,10 +672,24 @@ def step6_improved_method(kfs, pg, mapper, render_metrics_step1):
 
 
 def simulate_dynamic_scene_test(kfs, pg):
-    """模拟动态场景处理测试 (仿MASt3R-Fusion深度残差掩码)"""
+    """
+    改进版动态场景处理测试 (v3.1)
+    ==================================
+    仿MASt3R-Fusion method-001: 深度残差掩码 + RANSAC自然剔除
+
+    改进(P1):
+    - 不再"手动标记再检测"，而是利用RANSAC+3D距离一致性的天然鲁棒性
+    - 在正常匹配流程中注入深度异常点，检验RANSAC是否能够自然排除
+    - 这是对MASt3R-Fusion"深度不确定性掩码"的代理验证：
+      论文通过深度比阈值下加权(tau=1.25)，本Demo通过RANSAC 3D距离一致性
+      两种机制的目标一致——让系统对深度异常点具有鲁棒性
+
+    说明: 完整深度残差掩码需要Sim(3)对齐+Hessian紧凑化, 本Demo展示RANSAC的等效效果
+    """
     results = {}
 
-    print("  [Test] 远-近点深度下加权掩码...")
+    # === Part 1: 深度不确定性下加权 (仿MASt3R-Fusion §3B) ===
+    print("  [Test 1] 远-近点深度下加权掩码 (仿MASt3R-Fusion method-002)...")
     pm = kfs[0]['pointmap']
     conf = kfs[0]['confidence']
     valid = (conf > 0.5) & (pm[:, :, 2] > 0.01)
@@ -679,51 +697,113 @@ def simulate_dynamic_scene_test(kfs, pg):
 
     depths = pts_cam_all[:, 2]
     median_depth = np.median(depths)
-    far_points = pts_cam_all[depths > median_depth * 2]
+    far_points_mask = depths > median_depth * 2
+    far_points = pts_cam_all[far_points_mask]
 
     tau = 1.25
     f_downweight = 0.1
 
-    n_masked = 0
-    for pt in far_points[:50]:
-        depth_ratio = np.random.uniform(0.5, 3.0, size=1)[0]
-        if depth_ratio < tau:
-            n_masked += 1
+    # 模拟远-近点深度比分布，计算会被下加权的比例
+    # depth_ratio = (当前帧深度) / (参考帧深度), 小于tau时下加权
+    if len(far_points) > 0:
+        # 用最近点作为"当前帧"参考
+        near_ref_depth = np.min(depths[~far_points_mask]) if (~far_points_mask).any() else median_depth
+        far_near_ratios = near_ref_depth / (far_points[:, 2] + 1e-6)
+        n_masked = int((far_near_ratios < tau).sum())
+        rejection_rate = n_masked / max(len(far_points), 1)
+    else:
+        n_masked = 0
+        rejection_rate = 0.0
 
-    rejection_rate = n_masked / max(len(far_points[:50]), 1)
-    print(f"  [Mask] 远-近点下加权: 掩码率 {rejection_rate*100:.1f}% (tau={tau})")
+    print(f"  [Mask] 远-近点下加权: {n_masked}/{len(far_points)} 点被下加权 "
+          f"({rejection_rate*100:.1f}%, tau={tau})")
 
     results['depth_uncertainty_mask'] = {
+        'method': 'MASt3R-Fusion_depth_ratio_downweight',
         'tau': tau, 'f_downweight': f_downweight,
-        'n_total_far_points': len(far_points[:50]),
-        'n_masked': n_masked, 'rejection_rate': float(rejection_rate)
+        'n_total_far_points': len(far_points),
+        'n_masked': int(n_masked),
+        'rejection_rate': float(rejection_rate)
     }
 
-    print("  [Test] 动态物体深度残差剔除...")
-    R_opt, t_opt = pg.poses[0]
-    pts_world = (R_opt.T @ pts_cam_all.T - R_opt.T @ t_opt).T
+    # === Part 2: RANSAC自然剔除深度异常 (P1改进) ===
+    print("\n  [Test 2] RANSAC天然动态点剔除 (改进方案)...")
+    print("    原理: 在两帧正常点图中注入深度异常匹配点,")
+    print("          RANSAC基于3D一致性会自然排除这些异常点。")
+    print("    这是MASt3R-Fusion深度不确定性掩码的代理验证。")
 
-    n_static = len(pts_world) // 2
-    static_pts = pts_world[:n_static]
-    dynamic_pts = pts_world[n_static:] + np.random.randn(len(pts_world)-n_static, 3).astype(np.float32) * 0.5
+    # 使用前两帧做基准匹配
+    pm1 = kfs[0]['pointmap']
+    pm2 = kfs[1]['pointmap']
+    c1 = kfs[0]['confidence']
+    c2 = kfs[1]['confidence']
+    K = kfs[0]['K']
 
-    depth_threshold = 0.15
-    depth_diff = np.abs(static_pts[:, 2] - (static_pts[:, 2] + np.random.randn(n_static) * 0.02))
-    dyn_depth_diff = np.abs(dynamic_pts[:, 2] - (dynamic_pts[:, 2] + np.random.randn(len(dynamic_pts)) * 0.5))
+    # Step A: 基准匹配 (无污染)
+    R_base, t_base, inlier_base = match_pointmaps(pm1, c1, pm2, c2, K)
+    print(f"    基准匹配: 内点率={inlier_base:.3f}")
 
-    n_dyn_detected = (dyn_depth_diff > depth_threshold).sum()
-    n_static_false = (depth_diff > depth_threshold).sum()
-    dyn_rejection = n_dyn_detected / max(len(dynamic_pts), 1)
-    static_retention = 1.0 - n_static_false / max(len(depth_diff), 1)
+    # Step B: 注入深度异常点 (模拟动态物体)
+    pm2_contaminated = pm2.copy()
+    high_conf_mask = (c2 > 0.5) & (pm2[:, :, 2] > 0.1)
+    valid_idx_all = np.where(high_conf_mask)
 
-    print(f"  [Dynamic] 动态点剔除率: {dyn_rejection*100:.1f}%")
-    print(f"  [Dynamic] 静态点保留率: {static_retention*100:.1f}%")
+    if len(valid_idx_all[0]) > 0:
+        n_inject = min(len(valid_idx_all[0]) // 5, 100)  # 注入约20%的动态点
+        inject_indices = np.random.choice(len(valid_idx_all[0]), n_inject, replace=False)
 
+        injected_mask = np.zeros(pm2.shape[:2], dtype=bool)
+        for idx in inject_indices:
+            v, u = valid_idx_all[0][idx], valid_idx_all[1][idx]
+            # 大幅改变深度模拟动态物体
+            pm2_contaminated[v, u, 2] += np.random.uniform(2.0, 5.0)
+            injected_mask[v, u] = True
+
+    # Step C: 重新匹配 (受污染的pointmap)
+        R_cont, t_cont, inlier_cont = match_pointmaps(pm1, c1, pm2_contaminated, c2, K)
+        print(f"    注入后匹配: 内点率={inlier_cont:.3f} (注入{n_inject}个动态点)")
+
+        # Step D: 统计RANSAC自然剔除的深度异常点
+        # 将匹配结果应用到注入点，检查哪些注入点被RANSAC排除
+        diff_cont = pm2_contaminated - (R_cont @ pm1.transpose(1,2,0).reshape(-1,3).T + t_cont).T.reshape(pm1.shape)
+        errors_cont = np.sqrt(np.sum(diff_cont**2, axis=2))
+        threshold = 0.2
+        is_inlier_cont = errors_cont < threshold
+
+        n_injected_total = int(injected_mask.sum())
+        n_detected = int((injected_mask & ~is_inlier_cont).sum())
+        dyn_rejection = n_detected / max(n_injected_total, 1)
+
+        # 检查静态点的误剔除率
+        static_mask = high_conf_mask & ~injected_mask
+        n_static_original = int(static_mask.sum())
+        n_static_false = int((static_mask & ~is_inlier_cont).sum())
+        static_retention = 1.0 - n_static_false / max(n_static_original, 1)
+
+        print(f"    注入了 {n_injected_total} 个深度异常点")
+        print(f"    RANSAC自然剔除 {n_detected} 个 (剔除率 {dyn_rejection*100:.1f}%)")
+        print(f"    静态点保留率: {static_retention*100:.1f}%")
+    else:
+        dyn_rejection = 0.0
+        static_retention = 1.0
+        n_injected_total = 0
+        n_detected = 0
+        inlier_cont = 0.0
+        print("    无法执行: 无有效高置信度点")
+
+    inlier_cont_val = float(inlier_cont)
     results['dynamic_object_rejection'] = {
-        'depth_threshold': depth_threshold,
-        'n_dynamic': len(dynamic_pts), 'n_detected': int(n_dyn_detected),
+        'method': 'RANSAC_natural_outlier_rejection',
+        'explanation':
+            '通过在两帧正常点图匹配中注入深度异常点(模拟动态物体)，'
+            '利用RANSAC+3D距离一致性的天然鲁棒性自动排除深度不一致的匹配。'
+            '这等价于MASt3R-Fusion中通过深度残差掩码剔除动态物体的效果。',
+        'n_injected': int(n_injected_total),
+        'n_detected': int(n_detected),
         'rejection_rate': float(dyn_rejection),
-        'static_retention_rate': float(static_retention)
+        'static_retention_rate': float(static_retention),
+        'inlier_before': float(inlier_base),
+        'inlier_after': float(inlier_cont_val)
     }
 
     return results

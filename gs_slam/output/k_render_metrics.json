@@ -4,7 +4,7 @@
     "ssim": 0.9630659291141135,
     "lpips_proxy": 0.04965664377679013
   },
-  "render_time_ms": 210.04319190979004,
+  "render_time_ms": 215.5759334564209,
   "rendered_pixels": 163757,
   "n_gaussians": 300,
   "reference_type": "2x_highres_downsampled_pseudo_GT",

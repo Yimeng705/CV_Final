@@ -123,28 +123,28 @@
   "gs_count_performance": [
     {
       "n_gaussians": 99,
-      "render_time_ms": 90.10171890258789,
-      "render_fps": 11.098567398932031
+      "render_time_ms": 84.58185195922852,
+      "render_fps": 11.8228671616464
     },
     {
       "n_gaussians": 198,
-      "render_time_ms": 113.17992210388184,
-      "render_fps": 8.835489381960814
+      "render_time_ms": 118.95060539245605,
+      "render_fps": 8.406850866380045
     },
     {
       "n_gaussians": 300,
-      "render_time_ms": 144.7465419769287,
-      "render_fps": 6.908627911535123
+      "render_time_ms": 157.26661682128906,
+      "render_fps": 6.3586285520235775
     },
     {
       "n_gaussians": 498,
-      "render_time_ms": 219.51961517333984,
-      "render_fps": 4.555401571792878
+      "render_time_ms": 208.28008651733398,
+      "render_fps": 4.801227120273813
     },
     {
       "n_gaussians": 999,
-      "render_time_ms": 633.2845687866211,
-      "render_fps": 1.579068951444702
+      "render_time_ms": 658.1602096557617,
+      "render_fps": 1.5193868990090287
     }
   ]
 }
