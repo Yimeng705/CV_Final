@@ -355,6 +355,74 @@ def step5_sa_agd_ablation(gc, output_dir, device) -> Dict:
     return results
 
 
+def step5b_sem_weight_sweep(output_dir, device) -> Dict:
+    """
+    Semantic weight parameter sweep: Generate sem_sweep_w00~w06.png
+    
+    Renders the same scene with different sem_grad_weight values
+    to demonstrate SA-AGD parameter sensitivity. Generates images
+    used by frontend_cuda.html for interactive slider.
+    """
+    print_header("Step 5b: Semantic Weight Parameter Sweep (α=0.0~0.6)")
+    
+    from core.adaptive_density_cuda import CUDADensityController, run_cuda_densification_cycle
+    from slam.mapper_cuda import CUDADenseMapper
+    from core.camera import PinholeCamera, look_at
+    
+    cam = PinholeCamera()
+    R, t = look_at(np.array([3., 2., 4.]), np.array([0., 1., 0.]), np.array([0., 1., 0.]))
+    cam.set_pose(R, t)
+    
+    renderer = CUDASplatRenderer(device=device)
+    sweep_results = {}
+    
+    for w_int in range(0, 7):
+        w_val = w_int / 10.0  # 0.0, 0.1, ..., 0.6
+        
+        print(f"  Sweeping α={w_val:.1f} ...")
+        
+        # Create fresh scene for each weight
+        gc_tmp = create_test_scene_cuda(device=device, n_gaussians=400)
+        mapper = CUDADenseMapper(use_adaptive_density=False, device=device)
+        mapper.map = gc_tmp
+        mapper.assign_semantic_features(n_regions=4)
+        
+        ctrl = CUDADensityController(sem_grad_weight=w_val, device=device)
+        stats = run_cuda_densification_cycle(gc_tmp, ctrl, n_iterations=3, camera=cam)
+        
+        # Render result
+        gs_dict = gc_tmp.pack()
+        rgb, _ = renderer.forward(gs_dict, cam, differentiable=False)
+        
+        if HAS_PIL:
+            img = (rgb.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+            Image.fromarray(img).save(
+                os.path.join(output_dir, f'sem_sweep_w{w_int:02d}.png')
+            )
+        
+        # Compute Chamfer vs geometry-only baseline
+        if w_int == 0:
+            gc_baseline = gc_tmp
+            cd_val = 0.0
+        else:
+            cd_val = gc_tmp.chamfer_distance(gc_baseline)
+        
+        sweep_results[f'w{w_int:02d}'] = {
+            'sem_weight': w_val,
+            'n_gaussians': len(gc_tmp),
+            'n_cloned': stats.n_cloned,
+            'n_split': stats.n_split,
+            'n_semantic_boost': stats.n_semantic_boost,
+            'chamfer_vs_baseline': round(cd_val, 6),
+            'growth_ratio': round(len(gc_tmp) / 400, 3)
+        }
+        print(f"    GS={len(gc_tmp)}, boost={stats.n_semantic_boost}, "
+              f"growth={len(gc_tmp)/400:.2f}x, CD={cd_val:.4f}")
+    
+    print(f"\n  Generated {7} sweep images: {output_dir}/sem_sweep_w*.png")
+    return sweep_results
+
+
 def step6_slam_pipeline(gc, poses, frontend, output_dir, device) -> Dict:
     """Run SLAM frontend tracking + backend optimization."""
     print_header("Step 6: SLAM Pipeline (Frontend + Backend)")
@@ -623,6 +691,10 @@ def main():
     sa_agd_results = step5_sa_agd_ablation(gc, base_output, device)
     all_results['sa_agd'] = sa_agd_results
     
+    # Step 5b: Semantic weight parameter sweep (P1)
+    sweep_results = step5b_sem_weight_sweep(base_output, device)
+    all_results['sem_weight_sweep'] = sweep_results
+    
     # Step 6: SLAM pipeline
     frontend = CUDAFrontend(device=device)
     slam_results = step6_slam_pipeline(gc, poses, frontend, base_output, device)
@@ -638,18 +710,34 @@ def main():
     with open(output_path, 'w') as f:
         json.dump(all_results, f, indent=2)
     
+    # Auto-generate HTML report (P1)
+    print_header("Generating HTML Report")
+    try:
+        from demo.generate_report import extract_metrics, find_images, generate_html_report
+        report_images = find_images(base_output)
+        report_metrics = extract_metrics(all_results)
+        report_path = os.path.join(base_output, 'report_cuda.html')
+        generate_html_report(report_metrics, report_images, report_path)
+        print(f"  ✅ HTML Report: {report_path}")
+        print(f"  🌐 Web前端: {os.path.join(os.path.dirname(__file__), 'frontend_cuda.html')}")
+    except Exception as e:
+        print(f"  ⚠ Report generation skipped: {e}")
+    
     # Final summary
     print_header("Pipeline Complete!")
     print(f"  Results saved to: {base_output}/")
     print(f"  Full summary:     {output_path}")
     print(f"\n  Key outputs:")
-    print(f"    a_cuda_render.png    - CUDA-accelerated 3DGS rendering")
-    print(f"    d_view_*.png         - Multi-view novel view synthesis")
-    print(f"    c_trajectory.json     - SLAM trajectory data")
-    print(f"    full_results.json     - Complete pipeline results")
+    print(f"    a_cuda_render.png      - CUDA-accelerated 3DGS rendering")
+    print(f"    d_view_*.png           - Multi-view novel view synthesis")
+    print(f"    sem_sweep_w*.png       - SA-AGD parameter sweep (α=0.0~0.6)")
+    print(f"    report_cuda.html        - Comprehensive HTML report")
+    print(f"    frontend_cuda.html      - Interactive Web demo")
+    print(f"    c_trajectory.json       - SLAM trajectory data")
+    print(f"    full_results.json       - Complete pipeline results")
     if args.train or args.all:
-        print(f"    checkpoints/         - Model checkpoints")
-        print(f"    logs/                - Training logs")
+        print(f"    checkpoints/           - Model checkpoints")
+        print(f"    logs/                  - Training logs")
     
     # Innovation summary
     print_header("Innovation Summary: SA-AGD + CUDA Optimization")
